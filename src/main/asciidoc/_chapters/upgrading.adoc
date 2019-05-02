@@ -67,7 +67,8 @@ In addition to the usual API versioning considerations HBase has other compatibi
 
 .Client API compatibility
 * Allow changing or removing existing client APIs.
-* An API needs to be deprecated for a major version before we will change/remove it.
+* An API needs to be deprecated for a whole major version before we will change/remove it.
+** An example: An API was deprecated in 2.0.1 and will be marked for deletion in 4.0.0. On the other hand, an API deprecated in 2.0.0 can be removed in 3.0.0.
 * APIs available in a patch version will be available in all later patch versions. However, new APIs may be added which will not be available in earlier patch versions.
 * New APIs introduced in a patch version will only be added in a source compatible way footnote:[See 'Source Compatibility' https://blogs.oracle.com/darcy/entry/kinds_of_compatibility]: i.e. code that implements public APIs will continue to compile.
 ** Example: A user using a newly deprecated API does not need to modify application code with HBase API calls until the next major version.
@@ -86,8 +87,16 @@ for warning about incompatible changes). All effort will be made to provide a de
 * Example: Old compiled Coprocessor, Filter, or Plugin code will work unchanged with the new jars.
 
 .Dependency Compatibility
-* An upgrade of HBase will not require an incompatible upgrade of a dependent project, including the Java runtime.
-* Example: An upgrade of Hadoop will not invalidate any of the compatibilities guarantees we made.
+* An upgrade of HBase will not require an incompatible upgrade of a dependent project, except for Apache Hadoop.
+* An upgrade of HBase will not require an incompatible upgrade of the Java runtime.
+* Example: Upgrading HBase to a version that supports _Dependency Compatibility_ won't require that you upgrade your Apache ZooKeeper service.
+* Example: If your current version of HBase supported running on JDK 8, then an upgrade to a version that supports _Dependency Compatibility_ will also run on JDK 8.
+
+.Hadoop Versions
+[TIP]
+====
+Previously, we tried to maintain dependency compatibility for the underly Hadoop service but over the last few years this has proven untenable. While the HBase project attempts to maintain support for older versions of Hadoop, we drop the "supported" designator for minor versions that fail to continue to see releases. Additionally, the Hadoop project has its own set of compatibility guidelines, which means in some cases having to update to a newer supported minor release might break some of our compatibility promises.
+====
 
 .Operational Compatibility
 * Metric changes
@@ -306,6 +315,20 @@ Quitting...
 
 == Upgrade Paths
 
+[[upgrade2.2]]
+=== Upgrade from 2.0 or 2.1 to 2.2+
+
+HBase 2.2+ uses a new Procedure form assiging/unassigning/moving Regions. It does not process HBase 2.1 and 2.0's Unassign/Assign Procedure types. Upgrade requires that we first drain the Master Procedure Store of old style Procedures before starting the new 2.2 Master. So you need to make sure that before you kill the old version (2.0 or 2.1) Master, there is no region in transition. And once the new version (2.2+) Master is up, you can rolling upgrade RegionServers one by one.
+
+And there is a more safer way if you are running 2.1.1+ or 2.0.3+ cluster. It need four steps to upgrade Master.
+
+. Shutdown both active and standby Masters (Your cluster will continue to server reads and writes without interruption).
+. Set the property hbase.procedure.upgrade-to-2-2 to true in hbase-site.xml for the Master, and start only one Master, still using the 2.1.1+ (or 2.0.3+) version.
+. Wait until the Master quits. Confirm that there is a 'READY TO ROLLING UPGRADE' message in the Master log as the cause of the shutdown. The Procedure Store is now empty.
+. Start new Masters with the new 2.2+ version.
+
+Then you can rolling upgrade RegionServers one by one. See link:https://issues.apache.org/jira/browse/HBASE-21075[HBASE-21075] for more details.
+
 [[upgrade2.0]]
 === Upgrading from 1.x to 2.x
 
@@ -323,7 +346,10 @@ As noted in the section <<basic.prerequisites>>, HBase 2.0+ requires a minimum o
 .HBCK must match HBase server version
 You *must not* use an HBase 1.x version of HBCK against an HBase 2.0+ cluster. HBCK is strongly tied to the HBase server version. Using the HBCK tool from an earlier release against an HBase 2.0+ cluster will destructively alter said cluster in unrecoverable ways.
 
-As of HBase 2.0, HBCK is a read-only tool that can report the status of some non-public system internals. You should not rely on the format nor content of these internals to remain consistent across HBase releases.
+As of HBase 2.0, HBCK (A.K.A _HBCK1_ or _hbck1_) is a read-only tool that can report the status of some non-public system internals. You should not rely on the format nor content of these internals to remain consistent across HBase releases.
+
+To read about HBCK's replacement, see <<HBCK2>> in <<ops_mgt>>.
+
 
 ////
 Link to a ref guide section on HBCK in 2.0 that explains use and calls out the inability of clients and server sides to detect version of each other.
@@ -378,7 +404,7 @@ The following configuration settings changed their default value. Where applicab
 * hbase.client.retries.number is now set to 10. Previously it was 35. Downstream users are advised to use client timeouts as described in section <<config_timeouts>> instead.
 * hbase.client.serverside.retries.multiplier is now set to 3. Previously it was 10. Downstream users are advised to use client timesout as describe in section <<config_timeouts>> instead.
 * hbase.master.fileSplitTimeout is now set to 10 minutes. Previously it was 30 seconds.
-* hbase.regionserver.logroll.multiplier is now set to 0.5. Previously it was 0.95.
+* hbase.regionserver.logroll.multiplier is now set to 0.5. Previously it was 0.95. This change is tied with the following doubling of block size. Combined, these two configuration changes should make for WALs of about the same size as those in hbase-1.x but there should be less incidence of small blocks because we fail to roll the WAL before we hit the blocksize threshold. See link:https://issues.apache.org/jira/browse/HBASE-19148[HBASE-19148] for discussion.
 * hbase.regionserver.hlog.blocksize defaults to 2x the HDFS default block size for the WAL dir. Previously it was equal to the HDFS default block size for the WAL dir.
 * hbase.client.start.log.errors.counter changed to 5. Previously it was 9.
 * hbase.ipc.server.callqueue.type changed to 'fifo'. In HBase versions 1.0 - 1.2 it was 'deadline'. In prior and later 1.x versions it already defaults to 'fifo'.
@@ -409,6 +435,21 @@ A brief summary of related changes:
 
 The Distributed Log Replay feature was broken and has been removed from HBase 2.y+. As a consequence all related configs, metrics, RPC fields, and logging have also been removed. Note that this feature was found to be unreliable in the run up to HBase 1.0, defaulted to being unused, and was effectively removed in HBase 1.2.0 when we started ignoring the config that turns it on (link:https://issues.apache.org/jira/browse/HBASE-14465[HBASE-14465]). If you are currently using the feature, be sure to perform a clean shutdown, ensure all DLR work is complete, and disable the feature prior to upgrading.
 
+[[upgrade2.0.prefix-tree.removed]]
+._prefix-tree_ encoding removed
+
+The prefix-tree encoding was removed from HBase 2.0.0 (link:https://issues.apache.org/jira/browse/HBASE-19179[HBASE-19179]).
+It was (late!) deprecated in hbase-1.2.7, hbase-1.4.0, and hbase-1.3.2.
+
+This feature was removed because it as not being actively maintained. If interested in reviving this
+sweet facility which improved random read latencies at the expensive of slowed writes,
+write the HBase developers list at _dev at hbase dot apache dot org_.
+
+The prefix-tree encoding needs to be removed from all tables before upgrading to HBase 2.0+.
+To do that first you need to change the encoding from PREFIX_TREE to something else that is supported in HBase 2.0.
+After that you have to major compact the tables that were using PREFIX_TREE encoding before.
+To check which column families are using incompatible data block encoding you can use <<ops.pre-upgrade,Pre-Upgrade Validator>>.
+
 [[upgrade2.0.metrics]]
 .Changed metrics
 
@@ -429,6 +470,18 @@ The following metrics have been removed:
 The following metrics have been added:
 
 * 'totalRowActionRequestCount' is a count of region row actions summing reads and writes.
+
+[[upgrade2.0.logging]]
+.Changed logging
+HBase-2.0.0 now uses link:https://www.slf4j.org/[slf4j] as its logging frontend.
+Prevously, we used link:http://logging.apache.org/log4j/1.2/[log4j (1.2)].
+For most the transition should be seamless; slf4j does a good job interpreting
+_log4j.properties_ logging configuration files such that you should not notice
+any difference in your log system emissions.
+
+That said, your _log4j.properties_ may need freshening. See link:https://issues.apache.org/jira/browse/HBASE-20351[HBASE-20351]
+for example, where a stale log configuration file manifest as netty configuration
+being dumped at DEBUG level as preamble on every shell command invocation.
 
 [[upgrade2.0.zkconfig]]
 .ZooKeeper configs no longer read from zoo.cfg
@@ -553,6 +606,42 @@ The internal changes to HBase during this upgrade were sufficient for compilatio
 
 If you previously relied on client side tracing integrated with HBase operations, it is recommended that you upgrade your usage to HTrace 4 as well.
 
+[[upgrade2.0.hfile.compatability]]
+.HFile lose forward compatability
+
+HFiles generated by 2.0.0, 2.0.1, 2.1.0 are not forward compatible to 1.4.6-, 1.3.2.1-, 1.2.6.1-,
+and other inactive releases. Why HFile lose compatability is hbase in new versions
+(2.0.0, 2.0.1, 2.1.0) use protobuf to serialize/deserialize TimeRangeTracker (TRT) while old
+versions use DataInput/DataOutput. To solve this, We have to put
+link:https://jira.apache.org/jira/browse/HBASE-21012[HBASE-21012]
+to 2.x and put link:https://jira.apache.org/jira/browse/HBASE-21013[HBASE-21013] in 1.x.
+For more information, please check
+link:https://jira.apache.org/jira/browse/HBASE-21008[HBASE-21008].
+
+[[upgrade2.0.perf]]
+.Performance
+
+You will likely see a change in the performance profile on upgrade to hbase-2.0.0 given
+read and write paths have undergone significant change. On release, writes may be
+slower with reads about the same or much better, dependent on context. Be prepared
+to spend time re-tuning (See <<performance>>).
+Performance is also an area that is now under active review so look forward to
+improvement in coming releases (See
+link:https://issues.apache.org/jira/browse/HBASE-20188[HBASE-20188 TESTING Performance]).
+
+[[upgrade2.0.it.kerberos]]
+.Integration Tests and Kerberos
+Integration Tests (`IntegrationTests*`) used to rely on the Kerberos credential cache
+for authentication against secured clusters. This used to lead to tests failing due
+to authentication failures when the tickets in the credential cache expired.
+As of hbase-2.0.0 (and hbase-1.3.0+), the integration test clients will make use
+of the configuration properties `hbase.client.keytab.file` and
+`hbase.client.kerberos.principal`. They are required. The clients will perform a
+login from the configured keytab file and automatically refresh the credentials
+in the background for the process lifetime (See
+link:https://issues.apache.org/jira/browse/HBASE-16231[HBASE-16231]).
+
+
 ////
 This would be a good place to link to an appendix on migrating applications
 ////
@@ -601,7 +690,34 @@ good justification to add it back, bring it our notice (dev@hbase.apache.org).
 
 [[upgrade2.0.rolling.upgrades]]
 ==== Rolling Upgrade from 1.x to 2.x
-There is no rolling upgrade from HBase 1.x+ to HBase 2.x+. In order to perform a zero downtime upgrade, you will need to run an additional cluster in parallel and handle failover in application logic.
+
+Rolling upgrades are currently an experimental feature.
+They have had limited testing. There are likely corner
+cases as yet uncovered in our
+limited experience so you should be careful if you go this
+route. The stop/upgrade/start described in the next section,
+<<upgrade2.0.process>>, is the safest route.
+
+That said, the below is a prescription for a
+rolling upgrade of a 1.4 cluster.
+
+.Pre-Requirements
+* Upgrade to the latest 1.4.x release. Pre 1.4 releases may also work but are not tested, so please upgrade to 1.4.3+ before upgrading to 2.x, unless you are an expert and familiar with the region assignment and crash processing. See the section <<upgrade1.4>> on how to upgrade to 1.4.x.
+* Make sure that the zk-less assignment is enabled, i.e, set `hbase.assignment.usezk` to `false`. This is the most important thing. It allows the 1.x master to assign/unassign regions to/from 2.x region servers. See the release note section of link:https://issues.apache.org/jira/browse/HBASE-11059[HBASE-11059] on how to migrate from zk based assignment to zk less assignment.
+* We have tested rolling upgrading from 1.4.3 to 2.1.0, but it should also work if you want to upgrade to 2.0.x.
+
+.Instructions
+. Unload a region server and upgrade it to 2.1.0. With link:https://issues.apache.org/jira/browse/HBASE-17931[HBASE-17931] in place, the meta region and regions for other system tables will be moved to this region server immediately. If not, please move them manually to the new region server. This is very important because
+** The schema of meta region is hard coded, if meta is on an old region server, then the new region servers can not access it as it does not have some families, for example, table state.
+** Client with lower version can communicate with server with higher version, but not vice versa. If the meta region is on an old region server, the new region server will use a client with higher version to communicate with a server with lower version, this may introduce strange problems.
+. Rolling upgrade all other region servers.
+. Upgrading masters.
+
+It is OK that during the rolling upgrading there are region server crashes. The 1.x master can assign regions to both 1.x and 2.x region servers, and link:https://issues.apache.org/jira/browse/HBASE-19166[HBASE-19166] fixed a problem so that 1.x region server can also read the WALs written by 2.x region server and split them.
+
+NOTE: please read the <<Changes of Note!,Changes of Note!>> section carefully before rolling upgrading. Make sure that you do not use the removed features in 2.0, for example, the prefix-tree encoding, the old hfile format, etc. They could both fail the upgrading and leave the cluster in an intermediate state and hard to recover.
+
+NOTE: If you have success running this prescription, please notify the dev list with a note on your experience and/or update the above with any deviations you may have taken so others going this route can benefit from your efforts.
 
 [[upgrade2.0.process]]
 ==== Upgrade process from 1.x to 2.x
@@ -645,6 +761,11 @@ Notes:
 ==== Raw scan now ignores TTL
 
 Doing a raw scan will now return results that have expired according to TTL settings.
+
+[[upgrade1.3]]
+=== Upgrading from pre-1.3 to 1.3+
+If running Integration Tests under Kerberos, see <<upgrade2.0.it.kerberos>>.
+
 
 [[upgrade1.0]]
 === Upgrading to 1.x

@@ -40,7 +40,9 @@ import org.apache.hadoop.hbase.replication.ReplicationQueueStorage;
 import org.apache.hadoop.hbase.replication.ReplicationStorageFactory;
 import org.apache.hadoop.hbase.replication.ReplicationTracker;
 import org.apache.hadoop.hbase.replication.ReplicationUtils;
+import org.apache.hadoop.hbase.replication.SyncReplicationState;
 import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.hbase.wal.SyncReplicationWALProvider;
 import org.apache.hadoop.hbase.wal.WALProvider;
 import org.apache.hadoop.hbase.zookeeper.ZKClusterId;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -66,6 +68,7 @@ public class Replication implements ReplicationSourceService, ReplicationSinkSer
   private ReplicationTracker replicationTracker;
   private Configuration conf;
   private ReplicationSink replicationSink;
+  private SyncReplicationPeerInfoProvider syncReplicationPeerInfoProvider;
   // Hosting server
   private Server server;
   /** Statistics thread schedule pool */
@@ -120,19 +123,40 @@ public class Replication implements ReplicationSourceService, ReplicationSinkSer
     } catch (KeeperException ke) {
       throw new IOException("Could not read cluster id", ke);
     }
+    SyncReplicationPeerMappingManager mapping = new SyncReplicationPeerMappingManager();
     this.replicationManager = new ReplicationSourceManager(queueStorage, replicationPeers,
         replicationTracker, conf, this.server, fs, logDir, oldLogDir, clusterId,
-        walProvider != null ? walProvider.getWALFileLengthProvider() : p -> OptionalLong.empty());
+        walProvider != null ? walProvider.getWALFileLengthProvider() : p -> OptionalLong.empty(),
+        mapping);
+    this.syncReplicationPeerInfoProvider =
+        new SyncReplicationPeerInfoProviderImpl(replicationPeers, mapping);
+    PeerActionListener peerActionListener = PeerActionListener.DUMMY;
     if (walProvider != null) {
       walProvider
         .addWALActionsListener(new ReplicationSourceWALActionListener(conf, replicationManager));
+      if (walProvider instanceof SyncReplicationWALProvider) {
+        SyncReplicationWALProvider syncWALProvider = (SyncReplicationWALProvider) walProvider;
+        peerActionListener = syncWALProvider;
+        syncWALProvider.setPeerInfoProvider(syncReplicationPeerInfoProvider);
+        // for sync replication state change, we need to reload the state twice, you can see the
+        // code in PeerProcedureHandlerImpl, so here we need to go over the sync replication peers
+        // to see if any of them are in the middle of the two refreshes, if so, we need to manually
+        // repeat the action we have done in the first refresh, otherwise when the second refresh
+        // comes we will be in trouble, such as NPE.
+        replicationPeers.getAllPeerIds().stream().map(replicationPeers::getPeer)
+            .filter(p -> p.getPeerConfig().isSyncReplication())
+            .filter(p -> p.getNewSyncReplicationState() != SyncReplicationState.NONE)
+            .forEach(p -> syncWALProvider.peerSyncReplicationStateChange(p.getId(),
+              p.getSyncReplicationState(), p.getNewSyncReplicationState(), 0));
+      }
     }
     this.statsThreadPeriod =
         this.conf.getInt("replication.stats.thread.period.seconds", 5 * 60);
     LOG.debug("Replication stats-in-log period={} seconds",  this.statsThreadPeriod);
     this.replicationLoad = new ReplicationLoad();
 
-    this.peerProcedureHandler = new PeerProcedureHandlerImpl(replicationManager);
+    this.peerProcedureHandler =
+      new PeerProcedureHandlerImpl(replicationManager, peerActionListener);
   }
 
   @Override
@@ -250,24 +274,21 @@ public class Replication implements ReplicationSourceService, ReplicationSinkSer
   }
 
   private void buildReplicationLoad() {
-    List<MetricsSource> sourceMetricsList = new ArrayList<>();
-
-    // get source
-    List<ReplicationSourceInterface> sources = this.replicationManager.getSources();
-    for (ReplicationSourceInterface source : sources) {
-      sourceMetricsList.add(source.getSourceMetrics());
-    }
-
-    // get old source
-    List<ReplicationSourceInterface> oldSources = this.replicationManager.getOldSources();
-    for (ReplicationSourceInterface source : oldSources) {
-      if (source instanceof ReplicationSource) {
-        sourceMetricsList.add(((ReplicationSource) source).getSourceMetrics());
-      }
-    }
-
+    List<ReplicationSourceInterface> allSources = new ArrayList<>();
+    allSources.addAll(this.replicationManager.getSources());
+    allSources.addAll(this.replicationManager.getOldSources());
     // get sink
     MetricsSink sinkMetrics = this.replicationSink.getSinkMetrics();
-    this.replicationLoad.buildReplicationLoad(sourceMetricsList, sinkMetrics);
+    this.replicationLoad.buildReplicationLoad(allSources, sinkMetrics);
+  }
+
+  @Override
+  public SyncReplicationPeerInfoProvider getSyncReplicationPeerInfoProvider() {
+    return syncReplicationPeerInfoProvider;
+  }
+
+  @Override
+  public ReplicationPeers getReplicationPeers() {
+    return replicationPeers;
   }
 }

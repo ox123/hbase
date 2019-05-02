@@ -29,7 +29,6 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
-import org.apache.commons.collections.CollectionUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HConstants;
@@ -53,6 +52,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.org.apache.commons.collections4.CollectionUtils;
 
 /**
  * ZK based replication queue storage.
@@ -118,7 +118,8 @@ class ZKReplicationQueueStorage extends ZKReplicationStorageBase
         .get(ZOOKEEPER_ZNODE_REPLICATION_REGIONS_KEY, ZOOKEEPER_ZNODE_REPLICATION_REGIONS_DEFAULT));
   }
 
-  private String getRsNode(ServerName serverName) {
+  @Override
+  public String getRsNode(ServerName serverName) {
     return ZNodePaths.joinZNode(queuesZNode, serverName.getServerName());
   }
 
@@ -393,10 +394,10 @@ class ZKReplicationQueueStorage extends ZKReplicationStorageBase
             " failed when creating the node for " + destServerName,
           e);
     }
+    String newQueueId = queueId + "-" + sourceServerName;
     try {
       String oldQueueNode = getQueueNode(sourceServerName, queueId);
       List<String> wals = ZKUtil.listChildrenNoWatch(zookeeper, oldQueueNode);
-      String newQueueId = queueId + "-" + sourceServerName;
       if (CollectionUtils.isEmpty(wals)) {
         ZKUtil.deleteNodeFailSilent(zookeeper, oldQueueNode);
         LOG.info("Removed empty {}/{}", sourceServerName, queueId);
@@ -427,11 +428,12 @@ class ZKReplicationQueueStorage extends ZKReplicationStorageBase
       return new Pair<>(newQueueId, logQueue);
     } catch (NoNodeException | NodeExistsException | NotEmptyException | BadVersionException e) {
       // Multi call failed; it looks like some other regionserver took away the logs.
-      // These exceptions mean that zk tells us the request can not be execute so it is safe to just
-      // return a null. For other types of exception should be thrown out to notify the upper layer.
+      // These exceptions mean that zk tells us the request can not be execute. So return an empty
+      // queue to tell the upper layer that claim nothing. For other types of exception should be
+      // thrown out to notify the upper layer.
       LOG.info("Claim queue queueId={} from {} to {} failed with {}, someone else took the log?",
           queueId,sourceServerName, destServerName, e.toString());
-      return null;
+      return new Pair<>(newQueueId, Collections.emptySortedSet());
     } catch (KeeperException | InterruptedException e) {
       throw new ReplicationException("Claim queue queueId=" + queueId + " from " +
         sourceServerName + " to " + destServerName + " failed", e);

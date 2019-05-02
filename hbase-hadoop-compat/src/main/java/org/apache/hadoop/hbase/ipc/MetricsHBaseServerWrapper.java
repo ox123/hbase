@@ -31,9 +31,19 @@ public interface MetricsHBaseServerWrapper {
 
   int getPriorityQueueLength();
 
+  int getMetaPriorityQueueLength();
+
   int getNumOpenConnections();
 
   int getActiveRpcHandlerCount();
+
+  int getActiveGeneralRpcHandlerCount();
+
+  int getActivePriorityRpcHandlerCount();
+
+  int getActiveReplicationRpcHandlerCount();
+
+  int getActiveMetaPriorityRpcHandlerCount();
 
   long getNumGeneralCallsDropped();
 
@@ -50,4 +60,6 @@ public interface MetricsHBaseServerWrapper {
   int getActiveReadRpcHandlerCount();
 
   int getActiveScanRpcHandlerCount();
+
+  long getNettyDmUsage();
 }

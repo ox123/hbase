@@ -18,18 +18,16 @@
 package org.apache.hadoop.hbase.client;
 
 import java.io.File;
-
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.MiniHBaseCluster;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.StartMiniClusterOption;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.master.HMaster;
-import org.apache.hadoop.hbase.master.NoSuchProcedureException;
+import org.apache.hadoop.hbase.master.assignment.AssignmentTestingUtil;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -43,10 +41,12 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category(MediumTests.class)
 public class TestSeparateClientZKCluster {
-  private static final Log LOG = LogFactory.getLog(TestSeparateClientZKCluster.class);
+  private static final Logger LOG = LoggerFactory.getLogger(TestSeparateClientZKCluster.class);
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static final File clientZkDir = new File("/tmp/TestSeparateClientZKCluster");
   private static final int ZK_SESSION_TIMEOUT = 5000;
@@ -81,7 +81,9 @@ public class TestSeparateClientZKCluster {
     // reduce zk session timeout to easier trigger session expiration
     TEST_UTIL.getConfiguration().setInt(HConstants.ZK_SESSION_TIMEOUT, ZK_SESSION_TIMEOUT);
     // Start a cluster with 2 masters and 3 regionservers.
-    TEST_UTIL.startMiniCluster(2, 3);
+    StartMiniClusterOption option = StartMiniClusterOption.builder()
+        .numMasters(2).numRegionServers(3).numDataNodes(3).build();
+    TEST_UTIL.startMiniCluster(option);
   }
 
   @AfterClass
@@ -91,7 +93,7 @@ public class TestSeparateClientZKCluster {
     FileUtils.deleteDirectory(clientZkDir);
   }
 
-  @Test(timeout = 60000)
+  @Test
   public void testBasicOperation() throws Exception {
     TableName tn = TableName.valueOf(name.getMethodName());
     // create table
@@ -118,7 +120,7 @@ public class TestSeparateClientZKCluster {
     }
   }
 
-  @Test(timeout = 60000)
+  @Test
   public void testMasterSwitch() throws Exception {
     // get an admin instance and issue some request first
     Connection conn = TEST_UTIL.getConnection();
@@ -142,7 +144,7 @@ public class TestSeparateClientZKCluster {
     }
   }
 
-  @Test(timeout = 60000)
+  @Test
   public void testMetaRegionMove() throws Exception {
     TableName tn = TableName.valueOf(name.getMethodName());
     // create table
@@ -163,11 +165,11 @@ public class TestSeparateClientZKCluster {
       Get get = new Get(row);
       Result result = table.get(get);
       // move meta region and confirm client could detect
-      byte[] destServerName = null;
+      ServerName destServerName = null;
       for (RegionServerThread rst : cluster.getLiveRegionServerThreads()) {
         ServerName name = rst.getRegionServer().getServerName();
         if (!name.equals(cluster.getServerHoldingMeta())) {
-          destServerName = Bytes.toBytes(name.getServerName());
+          destServerName = name;
           break;
         }
       }
@@ -180,7 +182,7 @@ public class TestSeparateClientZKCluster {
       for (RegionServerThread rst : cluster.getLiveRegionServerThreads()) {
         ServerName name = rst.getRegionServer().getServerName();
         if (!name.equals(currentServer)) {
-          destServerName = Bytes.toBytes(name.getServerName());
+          destServerName = name;
           break;
         }
       }
@@ -198,7 +200,7 @@ public class TestSeparateClientZKCluster {
     }
   }
 
-  @Test(timeout = 120000)
+  @Test
   public void testMetaMoveDuringClientZkClusterRestart() throws Exception {
     TableName tn = TableName.valueOf(name.getMethodName());
     // create table
@@ -216,7 +218,7 @@ public class TestSeparateClientZKCluster {
       put.addColumn(family, qualifier, value);
       table.put(put);
       // invalid connection cache
-      conn.clearRegionCache();
+      conn.clearRegionLocationCache();
       // stop client zk cluster
       clientZkCluster.shutdown();
       // stop current meta server and confirm the server shutdown process
@@ -229,12 +231,8 @@ public class TestSeparateClientZKCluster {
         Thread.sleep(200);
       }
       // wait for meta region online
-      try {
-        cluster.getMaster().getAssignmentManager()
-          .waitForAssignment(RegionInfoBuilder.FIRST_META_REGIONINFO);
-      } catch (NoSuchProcedureException e) {
-        // we don't need to take any further action
-      }
+      AssignmentTestingUtil.waitForAssignment(cluster.getMaster().getAssignmentManager(),
+        RegionInfoBuilder.FIRST_META_REGIONINFO);
       // wait some long time to make sure we will retry sync data to client ZK until data set
       Thread.sleep(10000);
       clientZkCluster.startup(clientZkDir);
@@ -249,7 +247,7 @@ public class TestSeparateClientZKCluster {
     }
   }
 
-  @Test(timeout = 60000)
+  @Test
   public void testAsyncTable() throws Exception {
     TableName tn = TableName.valueOf(name.getMethodName());
     ColumnFamilyDescriptorBuilder cfDescBuilder = ColumnFamilyDescriptorBuilder.newBuilder(family);

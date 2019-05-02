@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.procedure2;
 
 import java.io.IOException;
@@ -55,7 +54,7 @@ public abstract class StateMachineProcedure<TEnvironment, TState>
   private final AtomicBoolean aborted = new AtomicBoolean(false);
 
   private Flow stateFlow = Flow.HAS_MORE_STATE;
-  private int stateCount = 0;
+  protected int stateCount = 0;
   private int[] states = null;
 
   private List<Procedure<TEnvironment>> subProcList = null;
@@ -87,7 +86,7 @@ public abstract class StateMachineProcedure<TEnvironment, TState>
    *         Flow.HAS_MORE_STATE if there is another step.
    */
   protected abstract Flow executeFromState(TEnvironment env, TState state)
-  throws ProcedureSuspendedException, ProcedureYieldException, InterruptedException;
+          throws ProcedureSuspendedException, ProcedureYieldException, InterruptedException;
 
   /**
    * called to perform the rollback of the specified state
@@ -142,28 +141,39 @@ public abstract class StateMachineProcedure<TEnvironment, TState>
    * Add a child procedure to execute
    * @param subProcedure the child procedure
    */
-  protected void addChildProcedure(Procedure<TEnvironment>... subProcedure) {
-    if (subProcedure == null) return;
+  protected <T extends Procedure<TEnvironment>> void addChildProcedure(
+      @SuppressWarnings("unchecked") T... subProcedure) {
+    if (subProcedure == null) {
+      return;
+    }
     final int len = subProcedure.length;
-    if (len == 0) return;
+    if (len == 0) {
+      return;
+    }
     if (subProcList == null) {
       subProcList = new ArrayList<>(len);
     }
     for (int i = 0; i < len; ++i) {
       Procedure<TEnvironment> proc = subProcedure[i];
-      if (!proc.hasOwner()) proc.setOwner(getOwner());
+      if (!proc.hasOwner()) {
+        proc.setOwner(getOwner());
+      }
+
       subProcList.add(proc);
     }
   }
 
   @Override
   protected Procedure[] execute(final TEnvironment env)
-  throws ProcedureSuspendedException, ProcedureYieldException, InterruptedException {
+          throws ProcedureSuspendedException, ProcedureYieldException, InterruptedException {
     updateTimestamp();
     try {
       failIfAborted();
 
-      if (!hasMoreState() || isFailed()) return null;
+      if (!hasMoreState() || isFailed()) {
+        return null;
+      }
+
       TState state = getCurrentState();
       if (stateCount == 0) {
         setNextState(getStateId(state));
@@ -180,9 +190,12 @@ public abstract class StateMachineProcedure<TEnvironment, TState>
         this.cycles++;
       }
 
-      LOG.trace("{}", toString());
+      LOG.trace("{}", this);
       stateFlow = executeFromState(env, state);
-      if (!hasMoreState()) setNextState(EOF_STATE);
+      if (!hasMoreState()) {
+        setNextState(EOF_STATE);
+      }
+
       if (subProcList != null && !subProcList.isEmpty()) {
         Procedure[] subProcedures = subProcList.toArray(new Procedure[subProcList.size()]);
         subProcList = null;
@@ -197,29 +210,36 @@ public abstract class StateMachineProcedure<TEnvironment, TState>
   @Override
   protected void rollback(final TEnvironment env)
       throws IOException, InterruptedException {
-    if (isEofState()) stateCount--;
+    if (isEofState()) {
+      stateCount--;
+    }
+
     try {
       updateTimestamp();
       rollbackState(env, getCurrentState());
-      stateCount--;
     } finally {
+      stateCount--;
       updateTimestamp();
     }
   }
 
-  private boolean isEofState() {
+  protected boolean isEofState() {
     return stateCount > 0 && states[stateCount-1] == EOF_STATE;
   }
 
   @Override
   protected boolean abort(final TEnvironment env) {
     LOG.debug("Abort requested for {}", this);
-    if (hasMoreState()) {
-      aborted.set(true);
-      return true;
+    if (!hasMoreState()) {
+      LOG.warn("Ignore abort request on {} because it has already been finished", this);
+      return false;
     }
-    LOG.debug("Ignoring abort request on {}", this);
-    return false;
+    if (!isRollbackSupported(getCurrentState())) {
+      LOG.warn("Ignore abort request on {} because it does not support rollback", this);
+      return false;
+    }
+    aborted.set(true);
+    return true;
   }
 
   /**

@@ -222,7 +222,8 @@ public class Import extends Configured implements Tool {
           }
         }
       } catch (InterruptedException e) {
-        e.printStackTrace();
+        LOG.error("Interrupted while emitting Cell", e);
+        Thread.currentThread().interrupt();
       }
     }
 
@@ -286,7 +287,8 @@ public class Import extends Configured implements Tool {
           }
         }
       } catch (InterruptedException e) {
-        e.printStackTrace();
+        LOG.error("Interrupted while emitting Cell", e);
+        Thread.currentThread().interrupt();
       }
     }
 
@@ -319,7 +321,8 @@ public class Import extends Configured implements Tool {
       try {
         writeResult(row, value, context);
       } catch (InterruptedException e) {
-        e.printStackTrace();
+        LOG.error("Interrupted while writing result", e);
+        Thread.currentThread().interrupt();
       }
     }
 
@@ -542,7 +545,7 @@ public class Import extends Configured implements Tool {
         if(srcAndDest.length != 2) {
             continue;
         }
-        cfRenameMap.put(srcAndDest[0].getBytes(), srcAndDest[1].getBytes());
+        cfRenameMap.put(Bytes.toBytes(srcAndDest[0]), Bytes.toBytes(srcAndDest[1]));
       }
     }
     return cfRenameMap;

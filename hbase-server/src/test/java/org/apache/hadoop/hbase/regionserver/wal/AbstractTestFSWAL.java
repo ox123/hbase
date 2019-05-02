@@ -17,13 +17,14 @@
  */
 package org.apache.hadoop.hbase.regionserver.wal;
 
-import static org.junit.Assert.*;
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
-import static org.hamcrest.CoreMatchers.*;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -34,6 +35,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -408,7 +410,7 @@ public abstract class AbstractTestFSWAL {
       }
       // Add any old cluster id.
       List<UUID> clusterIds = new ArrayList<>(1);
-      clusterIds.add(UUID.randomUUID());
+      clusterIds.add(TEST_UTIL.getRandomUUID());
       // Now make appends run slow.
       goslow.set(true);
       for (int i = 0; i < countPerFamily; i++) {
@@ -472,5 +474,14 @@ public abstract class AbstractTestFSWAL {
       // the WriteEntry should be null since we fail before setting it.
       assertNull(key.getWriteEntry());
     }
+  }
+
+  @Test(expected = WALClosedException.class)
+  public void testRollWriterForClosedWAL() throws IOException {
+    String testName = currentTest.getMethodName();
+    AbstractFSWAL<?> wal = newWAL(FS, CommonFSUtils.getWALRootDir(CONF), DIR.toString(), testName,
+      CONF, null, true, null, null);
+    wal.close();
+    wal.rollWriter();
   }
 }

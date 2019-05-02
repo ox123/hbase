@@ -29,7 +29,6 @@ import static org.junit.Assert.fail;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,7 +37,6 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
-import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -50,6 +48,7 @@ import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.ClusterMetrics.Option;
 import org.apache.hadoop.hbase.CompareOperator;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -357,9 +356,9 @@ public class TestFromClientSide {
     Table ht = TEST_UTIL.createTable(tableName, FAMILIES);
     String value = "this is the value";
     String value2 = "this is some other value";
-    String keyPrefix1 = UUID.randomUUID().toString();
-    String keyPrefix2 = UUID.randomUUID().toString();
-    String keyPrefix3 = UUID.randomUUID().toString();
+    String keyPrefix1 = TEST_UTIL.getRandomUUID().toString();
+    String keyPrefix2 = TEST_UTIL.getRandomUUID().toString();
+    String keyPrefix3 = TEST_UTIL.getRandomUUID().toString();
     putRows(ht, 3, value, keyPrefix1);
     putRows(ht, 3, value, keyPrefix2);
     putRows(ht, 3, value, keyPrefix3);
@@ -449,7 +448,7 @@ public class TestFromClientSide {
   private void putRows(Table ht, int numRows, String value, String key)
       throws IOException {
     for (int i = 0; i < numRows; i++) {
-      String row = key + "_" + UUID.randomUUID().toString();
+      String row = key + "_" + TEST_UTIL.getRandomUUID().toString();
       System.out.println(String.format("Saving row: %s, with value %s", row,
           value));
       Put put = new Put(Bytes.toBytes(row));
@@ -1359,7 +1358,7 @@ public class TestFromClientSide {
     // Ensure maxVersions in query is respected
     Get get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(2);
+    get.readVersions(2);
     Result result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[4], STAMPS[5]},
@@ -1400,7 +1399,7 @@ public class TestFromClientSide {
     // Ensure maxVersions in query is respected
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(2);
+    get.readVersions(2);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[4], STAMPS[5]},
@@ -1430,7 +1429,7 @@ public class TestFromClientSide {
     // Ensure maxVersions in query is respected
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions();
+    get.readAllVersions();
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[1], STAMPS[2], STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6], STAMPS[7], STAMPS[8]},
@@ -1447,7 +1446,7 @@ public class TestFromClientSide {
         0, 7);
 
     get = new Get(ROW);
-    get.setMaxVersions();
+    get.readAllVersions();
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[1], STAMPS[2], STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6], STAMPS[7], STAMPS[8]},
@@ -1492,7 +1491,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6], STAMPS[7], STAMPS[8], STAMPS[9], STAMPS[11], STAMPS[13], STAMPS[15]},
@@ -1517,7 +1516,7 @@ public class TestFromClientSide {
     // Test that it's gone
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[1], STAMPS[2], STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6], STAMPS[8], STAMPS[9], STAMPS[13], STAMPS[15]},
@@ -1567,7 +1566,7 @@ public class TestFromClientSide {
 
     Get get = new Get(ROW);
     get.addColumn(FAMILIES[0], QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     Result result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[0], QUALIFIER,
         new long [] {STAMPS[1]},
@@ -1576,7 +1575,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addFamily(FAMILIES[0]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[0], QUALIFIER,
         new long [] {STAMPS[1]},
@@ -1605,7 +1604,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILIES[1], QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[1], QUALIFIER,
         new long [] {STAMPS[1], STAMPS[2], STAMPS[3]},
@@ -1614,7 +1613,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addFamily(FAMILIES[1]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[1], QUALIFIER,
         new long [] {STAMPS[1], STAMPS[2], STAMPS[3]},
@@ -1643,7 +1642,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILIES[2], QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[2], QUALIFIER,
         new long [] {STAMPS[2], STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6]},
@@ -1652,7 +1651,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addFamily(FAMILIES[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[2], QUALIFIER,
         new long [] {STAMPS[2], STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6]},
@@ -1680,7 +1679,7 @@ public class TestFromClientSide {
     // Try all families
 
     get = new Get(ROW);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertTrue("Expected 9 keys but received " + result.size(),
         result.size() == 9);
@@ -1689,7 +1688,7 @@ public class TestFromClientSide {
     get.addFamily(FAMILIES[0]);
     get.addFamily(FAMILIES[1]);
     get.addFamily(FAMILIES[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertTrue("Expected 9 keys but received " + result.size(),
         result.size() == 9);
@@ -1698,7 +1697,7 @@ public class TestFromClientSide {
     get.addColumn(FAMILIES[0], QUALIFIER);
     get.addColumn(FAMILIES[1], QUALIFIER);
     get.addColumn(FAMILIES[2], QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertTrue("Expected 9 keys but received " + result.size(),
         result.size() == 9);
@@ -1756,7 +1755,7 @@ public class TestFromClientSide {
     for (int i = 0; i < 1; i++) {
       Get get = new Get(ROW);
       get.addColumn(FAMILY, QUALIFIERS[i]);
-      get.setMaxVersions(Integer.MAX_VALUE);
+      get.readVersions(Integer.MAX_VALUE);
       Result result = ht.get(get);
       // verify version '1000'/'3000'/'5000' remains for all columns
       assertNResult(result, ROW, FAMILY, QUALIFIERS[i],
@@ -1827,7 +1826,7 @@ public class TestFromClientSide {
     // 5. check ROW
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIERS[0]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIERS[0],
         new long [] {ts[4]},
@@ -1836,7 +1835,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIERS[1]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIERS[1],
         new long [] {ts[2], ts[4]},
@@ -1845,13 +1844,13 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIERS[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertEquals(0, result.size());
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIERS[3]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIERS[3],
         new long [] {ts[2], ts[4]},
@@ -1860,7 +1859,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIERS[4]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIERS[4],
         new long [] {ts[2]},
@@ -1871,7 +1870,7 @@ public class TestFromClientSide {
     for (int i = 0; i < 5; i++) {
       get = new Get(ROW2);
       get.addColumn(FAMILY, QUALIFIERS[i]);
-      get.setMaxVersions(Integer.MAX_VALUE);
+      get.readVersions(Integer.MAX_VALUE);
       result = ht.get(get);
       // verify version '1000'/'3000'/'5000' remains for all columns
       assertNResult(result, ROW2, FAMILY, QUALIFIERS[i],
@@ -1931,7 +1930,7 @@ public class TestFromClientSide {
 
     Get get = new Get(ROW);
     get.addFamily(FAMILIES[0]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     Result result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[0], QUALIFIER,
         new long [] {ts[1]},
@@ -1963,7 +1962,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILIES[0], QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[0], QUALIFIER,
         new long [] {ts[1], ts[2], ts[3]},
@@ -2003,7 +2002,7 @@ public class TestFromClientSide {
     // the switch to using Scan for Get this is no longer the case.
     get = new Get(ROW);
     get.addFamily(FAMILIES[0]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILIES[0], QUALIFIER,
         new long [] {ts[1], ts[2], ts[3]},
@@ -2048,7 +2047,7 @@ public class TestFromClientSide {
     get = new Get(ROWS[2]);
     get.addFamily(FAMILIES[1]);
     get.addFamily(FAMILIES[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertTrue("Expected 4 key but received " + result.size() + ": " + result,
         result.size() == 4);
@@ -2070,7 +2069,7 @@ public class TestFromClientSide {
     get = new Get(ROWS[0]);
     get.addFamily(FAMILIES[1]);
     get.addFamily(FAMILIES[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertTrue("Expected 2 keys but received " + result.size(),
         result.size() == 2);
@@ -2094,7 +2093,7 @@ public class TestFromClientSide {
     get = new Get(ROWS[1]);
     get.addFamily(FAMILIES[1]);
     get.addFamily(FAMILIES[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertTrue("Expected 2 keys but received " + result.size(),
         result.size() == 2);
@@ -2110,7 +2109,7 @@ public class TestFromClientSide {
     get = new Get(ROWS[2]);
     get.addFamily(FAMILIES[1]);
     get.addFamily(FAMILIES[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertEquals(1, result.size());
     assertNResult(result, ROWS[2], FAMILIES[2], QUALIFIER,
@@ -2147,7 +2146,7 @@ public class TestFromClientSide {
     get = new Get(ROWS[3]);
     get.addFamily(FAMILIES[1]);
     get.addFamily(FAMILIES[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertTrue("Expected 1 key but received " + result.size(),
         result.size() == 1);
@@ -2155,7 +2154,7 @@ public class TestFromClientSide {
     get = new Get(ROWS[4]);
     get.addFamily(FAMILIES[1]);
     get.addFamily(FAMILIES[2]);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertTrue("Expected 2 keys but received " + result.size(),
         result.size() == 2);
@@ -2689,7 +2688,7 @@ public class TestFromClientSide {
   throws IOException {
     Get get = new Get(row);
     get.addColumn(family, qualifier);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     get.setTimeRange(stamps[start+1], Long.MAX_VALUE);
     Result result = ht.get(get);
     assertNResult(result, row, family, qualifier, stamps, values, start+1, end);
@@ -2700,7 +2699,7 @@ public class TestFromClientSide {
   throws IOException {
     Get get = new Get(row);
     get.addColumn(family, qualifier);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     get.setTimeRange(stamps[start], stamps[end]+1);
     Result result = ht.get(get);
     assertNResult(result, row, family, qualifier, stamps, values, start, end);
@@ -2711,7 +2710,7 @@ public class TestFromClientSide {
   throws IOException {
     Get get = new Get(row);
     get.addColumn(family, qualifier);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     Result result = ht.get(get);
     assertNResult(result, row, family, qualifier, stamps, values, start, end);
   }
@@ -2755,7 +2754,7 @@ public class TestFromClientSide {
     Get get = new Get(row);
     get.addColumn(family, qualifier);
     get.setTimestamp(stamp);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     Result result = ht.get(get);
     assertSingleResult(result, row, family, qualifier, stamp, value);
   }
@@ -2766,7 +2765,7 @@ public class TestFromClientSide {
     Get get = new Get(row);
     get.addColumn(family, qualifier);
     get.setTimestamp(stamp);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     Result result = ht.get(get);
     assertEmptyResult(result);
   }
@@ -3558,7 +3557,7 @@ public class TestFromClientSide {
     // Ensure maxVersions in query is respected
     Get get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(2);
+    get.readVersions(2);
     Result result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[4], STAMPS[5]},
@@ -3599,7 +3598,7 @@ public class TestFromClientSide {
     // Ensure maxVersions in query is respected
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(2);
+    get.readVersions(2);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[4], STAMPS[5]},
@@ -3630,7 +3629,7 @@ public class TestFromClientSide {
     // Ensure maxVersions in query is respected
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(7);
+    get.readVersions(7);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[2], STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6], STAMPS[7], STAMPS[8]},
@@ -3647,7 +3646,7 @@ public class TestFromClientSide {
         0, 6);
 
     get = new Get(ROW);
-    get.setMaxVersions(7);
+    get.readVersions(7);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[2], STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6], STAMPS[7], STAMPS[8]},
@@ -3692,7 +3691,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6], STAMPS[7], STAMPS[8], STAMPS[9], STAMPS[11], STAMPS[13], STAMPS[15]},
@@ -3717,7 +3716,7 @@ public class TestFromClientSide {
     // Test that it's gone
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     assertNResult(result, ROW, FAMILY, QUALIFIER,
         new long [] {STAMPS[1], STAMPS[2], STAMPS[3], STAMPS[4], STAMPS[5], STAMPS[6], STAMPS[8], STAMPS[9], STAMPS[13], STAMPS[15]},
@@ -3756,7 +3755,7 @@ public class TestFromClientSide {
 
     Get get = new Get(row);
     get.addColumn(FAMILY, qualifier);
-    get.setMaxVersions();
+    get.readAllVersions();
 
     // Check that the column indeed has the right values at timestamps 1 and
     // 2
@@ -3806,7 +3805,7 @@ public class TestFromClientSide {
 
     Get get = new Get(row);
     get.addColumn(FAMILY, qualifier);
-    get.setMaxVersions();
+    get.readAllVersions();
 
     // Check that the column indeed has the right values at timestamps 1 and
     // 2
@@ -3866,7 +3865,7 @@ public class TestFromClientSide {
 
     Get get = new Get(row);
     get.addColumn(FAMILY, qualifier);
-    get.setMaxVersions();
+    get.readAllVersions();
 
     // Check that the column indeed has the right values at timestamps 1 and
     // 2
@@ -4211,15 +4210,14 @@ public class TestFromClientSide {
       TEST_UTIL.createTable(tables[i], FAMILY);
     }
     Admin admin = TEST_UTIL.getAdmin();
-    HTableDescriptor[] ts = admin.listTables();
-    HashSet<HTableDescriptor> result = new HashSet<HTableDescriptor>(ts.length);
-    Collections.addAll(result, ts);
+    List<TableDescriptor> ts = admin.listTableDescriptors();
+    HashSet<TableDescriptor> result = new HashSet<>(ts);
     int size = result.size();
     assertTrue(size >= tables.length);
     for (int i = 0; i < tables.length && i < size; i++) {
       boolean found = false;
-      for (int j = 0; j < ts.length; j++) {
-        if (ts[j].getTableName().equals(tables[i])) {
+      for (int j = 0; j < ts.size(); j++) {
+        if (ts.get(j).getTableName().equals(tables[i])) {
           found = true;
           break;
         }
@@ -4334,7 +4332,7 @@ public class TestFromClientSide {
     for (HColumnDescriptor c : desc.getFamilies())
       c.setValue(attrName, attrValue);
     // update metadata for all regions of this table
-    admin.modifyTable(tableAname, desc);
+    admin.modifyTable(desc);
     // enable the table
     admin.enableTable(tableAname);
 
@@ -4689,7 +4687,7 @@ public class TestFromClientSide {
     final long ts = EnvironmentEdgeManager.currentTime();
     Get get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions();
+    get.readAllVersions();
 
     for (int versions = 1; versions <= numVersions; versions++) {
       Put put = new Put(ROW);
@@ -4725,7 +4723,7 @@ public class TestFromClientSide {
     final long ts = EnvironmentEdgeManager.currentTime();
     final Get get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions();
+    get.readAllVersions();
 
     for (int versions = 1; versions <= numVersions; versions++) {
       Put put = new Put(ROW);
@@ -5115,7 +5113,7 @@ public class TestFromClientSide {
     LOG.info("test data has " + numRecords + " records.");
 
     // by default, scan metrics collection is turned off
-    assertEquals(null, scan1.getScanMetrics());
+    assertEquals(null, scanner.getScanMetrics());
 
     // turn on scan metrics
     Scan scan2 = new Scan();
@@ -5126,7 +5124,7 @@ public class TestFromClientSide {
     }
     scanner.close();
     // closing the scanner will set the metrics.
-    assertNotNull(scan2.getScanMetrics());
+    assertNotNull(scanner.getScanMetrics());
 
     // set caching to 1, because metrics are collected in each roundtrip only
     scan2 = new Scan();
@@ -5139,7 +5137,7 @@ public class TestFromClientSide {
     }
     scanner.close();
 
-    ScanMetrics scanMetrics = scan2.getScanMetrics();
+    ScanMetrics scanMetrics = scanner.getScanMetrics();
     assertEquals("Did not access all the regions in the table", numOfRegions,
         scanMetrics.countOfRegions.get());
 
@@ -5155,7 +5153,7 @@ public class TestFromClientSide {
       }
     }
     scanner.close();
-    scanMetrics = scan2.getScanMetrics();
+    scanMetrics = scanner.getScanMetrics();
     assertEquals("Did not count the result bytes", numBytes,
       scanMetrics.countOfBytesInResults.get());
 
@@ -5172,7 +5170,7 @@ public class TestFromClientSide {
       }
     }
     scanner.close();
-    scanMetrics = scan2.getScanMetrics();
+    scanMetrics = scanner.getScanMetrics();
     assertEquals("Did not count the result bytes", numBytes,
       scanMetrics.countOfBytesInResults.get());
 
@@ -5200,18 +5198,9 @@ public class TestFromClientSide {
     for (Result result : scannerWithClose.next(numRecords + 1)) {
     }
     scannerWithClose.close();
-    ScanMetrics scanMetricsWithClose = getScanMetrics(scanWithClose);
+    ScanMetrics scanMetricsWithClose = scannerWithClose.getScanMetrics();
     assertEquals("Did not access all the regions in the table", numOfRegions,
         scanMetricsWithClose.countOfRegions.get());
-  }
-
-  private ScanMetrics getScanMetrics(Scan scan) throws Exception {
-    byte[] serializedMetrics = scan.getAttribute(Scan.SCAN_ATTRIBUTES_METRICS_DATA);
-    assertTrue("Serialized metrics were not found.", serializedMetrics != null);
-
-    ScanMetrics scanMetrics = ProtobufUtil.toScanMetrics(serializedMetrics);
-
-    return scanMetrics;
   }
 
   /**
@@ -5235,13 +5224,12 @@ public class TestFromClientSide {
       CacheConfig cacheConf = store.getCacheConfig();
       cacheConf.setCacheDataOnWrite(true);
       cacheConf.setEvictOnClose(true);
-      BlockCache cache = cacheConf.getBlockCache();
+      BlockCache cache = cacheConf.getBlockCache().get();
 
       // establish baseline stats
       long startBlockCount = cache.getBlockCount();
       long startBlockHits = cache.getStats().getHitCount();
       long startBlockMiss = cache.getStats().getMissCount();
-
 
       // wait till baseline is stable, (minimal 500 ms)
       for (int i = 0; i < 5; i++) {
@@ -5363,8 +5351,7 @@ public class TestFromClientSide {
         HRegionServer regionServer = TEST_UTIL.getHBaseCluster().getRegionServer(i);
         ServerName addr = regionServer.getServerName();
         if (addr.getPort() != addrBefore.getPort()) {
-          admin.move(regionInfo.getEncodedNameAsBytes(),
-              Bytes.toBytes(addr.toString()));
+          admin.move(regionInfo.getEncodedNameAsBytes(), addr);
           // Wait for the region to move.
           Thread.sleep(5000);
           addrAfter = addr;
@@ -6353,41 +6340,17 @@ public class TestFromClientSide {
     assertEquals(4, count); // 003 004 005 006
   }
 
-  @Test
-  public void testGetStartEndKeysWithRegionReplicas() throws IOException {
-    HTableDescriptor htd = new HTableDescriptor(TableName.valueOf(name.getMethodName()));
-    HColumnDescriptor fam = new HColumnDescriptor(FAMILY);
-    htd.addFamily(fam);
-    byte[][] KEYS = HBaseTestingUtility.KEYS_FOR_HBA_CREATE_TABLE;
-    Admin admin = TEST_UTIL.getAdmin();
-    admin.createTable(htd, KEYS);
-    List<HRegionInfo> regions = admin.getTableRegions(htd.getTableName());
+  private static Pair<byte[][], byte[][]> getStartEndKeys(List<RegionLocations> regions) {
+    final byte[][] startKeyList = new byte[regions.size()][];
+    final byte[][] endKeyList = new byte[regions.size()][];
 
-    HRegionLocator locator =
-        (HRegionLocator) admin.getConnection().getRegionLocator(htd.getTableName());
-    for (int regionReplication = 1; regionReplication < 4; regionReplication++) {
-      List<RegionLocations> regionLocations = new ArrayList<>();
-
-      // mock region locations coming from meta with multiple replicas
-      for (HRegionInfo region : regions) {
-        HRegionLocation[] arr = new HRegionLocation[regionReplication];
-        for (int i = 0; i < arr.length; i++) {
-          arr[i] = new HRegionLocation(RegionReplicaUtil.getRegionInfoForReplica(region, i), null);
-        }
-        regionLocations.add(new RegionLocations(arr));
-      }
-
-      Pair<byte[][], byte[][]> startEndKeys = locator.getStartEndKeys(regionLocations);
-
-      assertEquals(KEYS.length + 1, startEndKeys.getFirst().length);
-
-      for (int i = 0; i < KEYS.length + 1; i++) {
-        byte[] startKey = i == 0 ? HConstants.EMPTY_START_ROW : KEYS[i - 1];
-        byte[] endKey = i == KEYS.length ? HConstants.EMPTY_END_ROW : KEYS[i];
-        assertArrayEquals(startKey, startEndKeys.getFirst()[i]);
-        assertArrayEquals(endKey, startEndKeys.getSecond()[i]);
-      }
+    for (int i = 0; i < regions.size(); i++) {
+      RegionInfo region = regions.get(i).getRegionLocation().getRegion();
+      startKeyList[i] = region.getStartKey();
+      endKeyList[i] = region.getEndKey();
     }
+
+    return new Pair<>(startKeyList, endKeyList);
   }
 
   @Test
@@ -6397,7 +6360,7 @@ public class TestFromClientSide {
     scan.setCaching(1);
     // Filter out any records
     scan.setFilter(new FilterList(new FirstKeyOnlyFilter(), new InclusiveStopFilter(new byte[0])));
-    try (Table table = TEST_UTIL.getConnection().getTable(TableName.NAMESPACE_TABLE_NAME)) {
+    try (Table table = TEST_UTIL.getConnection().getTable(TableName.META_TABLE_NAME)) {
       try (ResultScanner s = table.getScanner(scan)) {
         assertNull(s.next());
       }
@@ -6418,6 +6381,13 @@ public class TestFromClientSide {
     int number = ((ConnectionImplementation)admin.getConnection())
       .getNumberOfCachedRegionLocations(htd.getTableName());
     assertEquals(results.size(), number);
+    ConnectionImplementation conn = ((ConnectionImplementation)admin.getConnection());
+    assertNotNull("Can't get cached location for row aaa",
+        conn.getCachedLocation(htd.getTableName(),Bytes.toBytes("aaa")));
+    for(byte[] startKey:HBaseTestingUtility.KEYS_FOR_HBA_CREATE_TABLE){
+      assertNotNull("Can't get cached location for row "+
+        Bytes.toString(startKey),(conn.getCachedLocation(htd.getTableName(),startKey)));
+    }
   }
 
   @Test
@@ -6479,7 +6449,7 @@ public class TestFromClientSide {
 
     Get get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     Result result = ht.get(get);
     // verify version 1000,2000,4000 remains for column FAMILY:QUALIFIER
     assertNResult(result, ROW, FAMILY, QUALIFIER, new long[] { ts[0], ts[1], ts[3] }, new byte[][] {
@@ -6492,7 +6462,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     // verify version 1000,2000,4000 remains for column FAMILY:QUALIFIER
     assertNResult(result, ROW, FAMILY, QUALIFIER, new long[] { ts[0], ts[1], ts[3] }, new byte[][] {
@@ -6526,7 +6496,7 @@ public class TestFromClientSide {
 
     Get get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     Result result = ht.get(get);
     // verify version 1000,2000,3000 remains for column FAMILY:QUALIFIER
     assertNResult(result, ROW, FAMILY, QUALIFIER, new long[] { ts[0], ts[1], ts[2] }, new byte[][] {
@@ -6540,7 +6510,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     // verify version 1000 remains for column FAMILY:QUALIFIER
     assertNResult(result, ROW, FAMILY, QUALIFIER, new long[] { ts[0] }, new byte[][] { VALUES[0] },
@@ -6553,7 +6523,7 @@ public class TestFromClientSide {
 
     get = new Get(ROW);
     get.addColumn(FAMILY, QUALIFIER);
-    get.setMaxVersions(Integer.MAX_VALUE);
+    get.readVersions(Integer.MAX_VALUE);
     result = ht.get(get);
     // verify version 1000,5000 remains for column FAMILY:QUALIFIER
     assertNResult(result, ROW, FAMILY, QUALIFIER, new long[] { ts[0], ts[4] }, new byte[][] {
@@ -6599,7 +6569,7 @@ public class TestFromClientSide {
     Get get =
         new Get(ROW)
             .setFilter(new ValueFilter(CompareOperator.EQUAL, new SubstringComparator("value-a")))
-            .setMaxVersions(3);
+            .readVersions(3);
     result = table.get(get);
     // ts[0] has gone from user view. Only read ts[2] which value is less or equal to 3
     assertNResult(result, ROW, FAMILY, QUALIFIER, new long[] { ts[1] }, new byte[][] { VALUEA }, 0,
@@ -6619,7 +6589,7 @@ public class TestFromClientSide {
     get =
         new Get(ROW)
             .setFilter(new ValueFilter(CompareOperator.EQUAL, new SubstringComparator("value-a")))
-            .setMaxVersions(1);
+            .readVersions(1);
     result = table.get(get);
     // ts[0] has gone from user view. Only read ts[2] which value is less or equal to 3
     assertNResult(result, ROW, FAMILY, QUALIFIER, new long[] { ts[1] }, new byte[][] { VALUEA }, 0,
@@ -6639,7 +6609,7 @@ public class TestFromClientSide {
     get =
         new Get(ROW)
             .setFilter(new ValueFilter(CompareOperator.EQUAL, new SubstringComparator("value-a")))
-            .setMaxVersions(5);
+            .readVersions(5);
     result = table.get(get);
     // ts[0] has gone from user view. Only read ts[2] which value is less or equal to 3
     assertNResult(result, ROW, FAMILY, QUALIFIER, new long[] { ts[1] }, new byte[][] { VALUEA }, 0,
@@ -6700,5 +6670,31 @@ public class TestFromClientSide {
       // No more results in this scan
       assertNull(scanner.next());
     }
+  }
+
+  @Test(expected = DoNotRetryIOException.class)
+  public void testCreateTableWithZeroRegionReplicas() throws Exception {
+    TableName tableName = TableName.valueOf(name.getMethodName());
+    TableDescriptor desc = TableDescriptorBuilder.newBuilder(tableName)
+        .setColumnFamily(ColumnFamilyDescriptorBuilder.of(Bytes.toBytes("cf")))
+        .setRegionReplication(0)
+        .build();
+
+    TEST_UTIL.getAdmin().createTable(desc);
+  }
+
+  @Test(expected = DoNotRetryIOException.class)
+  public void testModifyTableWithZeroRegionReplicas() throws Exception {
+    TableName tableName = TableName.valueOf(name.getMethodName());
+    TableDescriptor desc = TableDescriptorBuilder.newBuilder(tableName)
+        .setColumnFamily(ColumnFamilyDescriptorBuilder.of(Bytes.toBytes("cf")))
+        .build();
+
+    TEST_UTIL.getAdmin().createTable(desc);
+    TableDescriptor newDesc = TableDescriptorBuilder.newBuilder(desc)
+        .setRegionReplication(0)
+        .build();
+
+    TEST_UTIL.getAdmin().modifyTable(newDesc);
   }
 }

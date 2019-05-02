@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hbase.replication.regionserver;
 
+import static org.apache.hadoop.hbase.replication.ReplicationUtils.sleepForRetries;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.PriorityBlockingQueue;
@@ -24,8 +26,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.replication.ReplicationEndpoint;
-import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.hadoop.hbase.wal.WALEdit;
@@ -48,13 +50,13 @@ public class ReplicationSourceShipper extends Thread {
   public enum WorkerState {
     RUNNING,
     STOPPED,
-    FINISHED,  // The worker is done processing a recovered queue
+    FINISHED,  // The worker is done processing a queue
   }
 
   private final Configuration conf;
   protected final String walGroupId;
   protected final PriorityBlockingQueue<Path> queue;
-  private final ReplicationSourceInterface source;
+  private final ReplicationSource source;
 
   // Last position in the log that we sent to ZooKeeper
   // It will be accessed by the stats thread so make it volatile
@@ -69,9 +71,11 @@ public class ReplicationSourceShipper extends Thread {
   protected final long sleepForRetries;
   // Maximum number of retries before taking bold actions
   protected final int maxRetriesMultiplier;
+  private final int DEFAULT_TIMEOUT = 20000;
+  private final int getEntriesTimeout;
 
   public ReplicationSourceShipper(Configuration conf, String walGroupId,
-      PriorityBlockingQueue<Path> queue, ReplicationSourceInterface source) {
+      PriorityBlockingQueue<Path> queue, ReplicationSource source) {
     this.conf = conf;
     this.walGroupId = walGroupId;
     this.queue = queue;
@@ -80,24 +84,31 @@ public class ReplicationSourceShipper extends Thread {
         this.conf.getLong("replication.source.sleepforretries", 1000);    // 1 second
     this.maxRetriesMultiplier =
         this.conf.getInt("replication.source.maxretriesmultiplier", 300); // 5 minutes @ 1 sec per
+    this.getEntriesTimeout =
+        this.conf.getInt("replication.source.getEntries.timeout", DEFAULT_TIMEOUT); // 20 seconds
   }
 
   @Override
   public final void run() {
     setWorkerState(WorkerState.RUNNING);
+    LOG.info("Running ReplicationSourceShipper Thread for wal group: {}", this.walGroupId);
     // Loop until we close down
     while (isActive()) {
-      int sleepMultiplier = 1;
       // Sleep until replication is enabled again
       if (!source.isPeerEnabled()) {
-        if (sleepForRetries("Replication is disabled", sleepMultiplier)) {
-          sleepMultiplier++;
-        }
+        // The peer enabled check is in memory, not expensive, so do not need to increase the
+        // sleep interval as it may cause a long lag when we enable the peer.
+        sleepForRetries("Replication is disabled", sleepForRetries, 1, maxRetriesMultiplier);
         continue;
       }
       try {
-        WALEntryBatch entryBatch = entryReader.take();
-        // the NO_MORE_DATA instance has no path so do not all shipEdits
+        WALEntryBatch entryBatch = entryReader.poll(getEntriesTimeout);
+        LOG.debug("Shipper from source {} got entry batch from reader: {}",
+            source.getQueueId(), entryBatch);
+        if (entryBatch == null) {
+          continue;
+        }
+        // the NO_MORE_DATA instance has no path so do not call shipEdits
         if (entryBatch == WALEntryBatch.NO_MORE_DATA) {
           noMoreData();
         } else {
@@ -112,16 +123,36 @@ public class ReplicationSourceShipper extends Thread {
     if (!isFinished()) {
       setWorkerState(WorkerState.STOPPED);
     } else {
+      source.removeWorker(this);
       postFinish();
     }
   }
 
-  // To be implemented by recovered shipper
-  protected void noMoreData() {
+  private void noMoreData() {
+    if (source.isRecovered()) {
+      LOG.debug("Finished recovering queue for group {} of peer {}", walGroupId,
+        source.getQueueId());
+      source.getSourceMetrics().incrCompletedRecoveryQueue();
+    } else {
+      LOG.debug("Finished queue for group {} of peer {}", walGroupId, source.getQueueId());
+    }
+    setWorkerState(WorkerState.FINISHED);
   }
 
   // To be implemented by recovered shipper
   protected void postFinish() {
+  }
+
+  /**
+   * get batchEntry size excludes bulk load file sizes.
+   * Uses ReplicationSourceWALReader's static method.
+   */
+  private int getBatchEntrySizeExcludeBulkLoad(WALEntryBatch entryBatch) {
+    int totalSize = 0;
+    for(Entry entry : entryBatch.getWalEntries()) {
+      totalSize += entryReader.getEntrySizeExcludeBulkLoad(entry);
+    }
+    return  totalSize;
   }
 
   /**
@@ -131,15 +162,13 @@ public class ReplicationSourceShipper extends Thread {
     List<Entry> entries = entryBatch.getWalEntries();
     int sleepMultiplier = 0;
     if (entries.isEmpty()) {
-      if (updateLogPosition(entryBatch)) {
-        // if there was nothing to ship and it's not an error
-        // set "ageOfLastShippedOp" to <now> to indicate that we're current
-        source.getSourceMetrics().setAgeOfLastShippedOp(EnvironmentEdgeManager.currentTime(),
-          walGroupId);
-      }
+      updateLogPosition(entryBatch);
       return;
     }
     int currentSize = (int) entryBatch.getHeapSize();
+    int sizeExcludeBulkLoad = getBatchEntrySizeExcludeBulkLoad(entryBatch);
+    source.getSourceMetrics().setTimeStampNextToReplicate(entries.get(entries.size() - 1)
+        .getKey().getWriteTime());
     while (isActive()) {
       try {
         try {
@@ -151,7 +180,6 @@ public class ReplicationSourceShipper extends Thread {
           // directly go back to while() for confirm this
           continue;
         }
-
         // create replicateContext here, so the entries can be GC'd upon return from this call
         // stack
         ReplicationEndpoint.ReplicateContext replicateContext =
@@ -172,25 +200,34 @@ public class ReplicationSourceShipper extends Thread {
         // Clean up hfile references
         for (Entry entry : entries) {
           cleanUpHFileRefs(entry.getEdit());
+          LOG.trace("shipped entry {}: ", entry);
+          TableName tableName = entry.getKey().getTableName();
+          source.getSourceMetrics().setAgeOfLastShippedOpByTable(entry.getKey().getWriteTime(),
+              tableName.getNameAsString());
         }
         // Log and clean up WAL logs
         updateLogPosition(entryBatch);
 
-        source.postShipEdits(entries, currentSize);
+        //offsets totalBufferUsed by deducting shipped batchSize (excludes bulk load size)
+        //this sizeExcludeBulkLoad has to use same calculation that when calling
+        //acquireBufferQuota() in ReplicatinoSourceWALReader because they maintain
+        //same variable: totalBufferUsed
+        source.postShipEdits(entries, sizeExcludeBulkLoad);
         // FIXME check relationship between wal group and overall
         source.getSourceMetrics().shipBatch(entryBatch.getNbOperations(), currentSize,
           entryBatch.getNbHFiles());
         source.getSourceMetrics().setAgeOfLastShippedOp(
           entries.get(entries.size() - 1).getKey().getWriteTime(), walGroupId);
         if (LOG.isTraceEnabled()) {
-          LOG.trace("Replicated " + entries.size() + " entries or " + entryBatch.getNbOperations()
-              + " operations in " + ((endTimeNs - startTimeNs) / 1000000) + " ms");
+          LOG.debug("Replicated {} entries or {} operations in {} ms",
+              entries.size(), entryBatch.getNbOperations(), (endTimeNs - startTimeNs) / 1000000);
         }
         break;
       } catch (Exception ex) {
-        LOG.warn(source.getReplicationEndpoint().getClass().getName() + " threw unknown exception:"
-            + org.apache.hadoop.util.StringUtils.stringifyException(ex));
-        if (sleepForRetries("ReplicationEndpoint threw exception", sleepMultiplier)) {
+        LOG.warn("{} threw unknown exception:",
+          source.getReplicationEndpoint().getClass().getName(), ex);
+        if (sleepForRetries("ReplicationEndpoint threw exception", sleepForRetries, sleepMultiplier,
+          maxRetriesMultiplier)) {
           sleepMultiplier++;
         }
       }
@@ -229,8 +266,7 @@ public class ReplicationSourceShipper extends Thread {
     // position and the file will be removed soon in cleanOldLogs.
     if (batch.isEndOfFile() || !batch.getLastWalPath().equals(currentPath) ||
       batch.getLastWalPosition() != currentPosition) {
-      source.getSourceManager().logPositionAndCleanOldLogs(source.getQueueId(),
-        source.isRecovered(), batch);
+      source.getSourceManager().logPositionAndCleanOldLogs(source, batch);
       updated = true;
     }
     // if end of file is true, then we can just skip to the next file in queue.
@@ -268,7 +304,7 @@ public class ReplicationSourceShipper extends Thread {
     return 0;
   }
 
-  private boolean isActive() {
+  protected boolean isActive() {
     return source.isSourceActive() && state == WorkerState.RUNNING && !isInterrupted();
   }
 
@@ -282,24 +318,5 @@ public class ReplicationSourceShipper extends Thread {
 
   public boolean isFinished() {
     return state == WorkerState.FINISHED;
-  }
-
-  /**
-   * Do the sleeping logic
-   * @param msg Why we sleep
-   * @param sleepMultiplier by how many times the default sleeping time is augmented
-   * @return True if <code>sleepMultiplier</code> is &lt; <code>maxRetriesMultiplier</code>
-   */
-  public boolean sleepForRetries(String msg, int sleepMultiplier) {
-    try {
-      if (LOG.isTraceEnabled()) {
-        LOG.trace(msg + ", sleeping " + sleepForRetries + " times " + sleepMultiplier);
-      }
-      Thread.sleep(this.sleepForRetries * sleepMultiplier);
-    } catch (InterruptedException e) {
-      LOG.debug("Interrupted while sleeping between retries");
-      Thread.currentThread().interrupt();
-    }
-    return sleepMultiplier < maxRetriesMultiplier;
   }
 }

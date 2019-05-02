@@ -116,7 +116,7 @@ public class TestBlockReorderMultiBlocks {
     byte[] sb = Bytes.toBytes("sb");
     htu.startMiniZKCluster();
 
-    MiniHBaseCluster hbm = htu.startMiniHBaseCluster(1, 1);
+    MiniHBaseCluster hbm = htu.startMiniHBaseCluster();
     hbm.waitForActiveAndReadyMaster();
     HRegionServer targetRs = LoadBalancer.isTablesOnMaster(hbm.getConf())? hbm.getMaster():
       hbm.getRegionServer(0);
@@ -141,7 +141,7 @@ public class TestBlockReorderMultiBlocks {
 
     // Now we need to find the log file, its locations, and look at it
 
-    String rootDir = new Path(FSUtils.getRootDir(conf) + "/" + HConstants.HREGION_LOGDIR_NAME +
+    String rootDir = new Path(FSUtils.getWALRootDir(conf) + "/" + HConstants.HREGION_LOGDIR_NAME +
             "/" + targetRs.getServerName().toString()).toUri().getPath();
 
     DistributedFileSystem mdfs = (DistributedFileSystem)

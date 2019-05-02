@@ -25,8 +25,8 @@ import org.apache.yetus.audience.InterfaceAudience;
 @InterfaceAudience.Private
 class ServerQueue extends Queue<ServerName> {
 
-  public ServerQueue(ServerName serverName, LockStatus serverLock) {
-    super(serverName, serverLock);
+  public ServerQueue(ServerName serverName, int priority, LockStatus serverLock) {
+    super(serverName, priority, serverLock);
   }
 
   @Override
@@ -35,6 +35,10 @@ class ServerQueue extends Queue<ServerName> {
     switch (spi.getServerOperationType()) {
       case CRASH_HANDLER:
         return true;
+      case SWITCH_RPC_THROTTLE:
+      case SPLIT_WAL:
+      case SPLIT_WAL_REMOTE:
+        return false;
       default:
         break;
     }

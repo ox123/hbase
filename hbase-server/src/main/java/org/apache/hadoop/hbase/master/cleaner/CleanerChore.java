@@ -18,20 +18,24 @@
 package org.apache.hadoop.hbase.master.cleaner;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.RecursiveTask;
 import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.PathIsNotEmptyDirectoryException;
 import org.apache.hadoop.hbase.ScheduledChore;
 import org.apache.hadoop.hbase.Stoppable;
 import org.apache.hadoop.hbase.conf.ConfigurationObserver;
@@ -117,7 +121,7 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
           break;
         }
       }
-      pool.shutdownNow();
+      shutDownNow();
       LOG.info("Update chore's pool size from {} to {}", pool.getParallelism(), size);
       pool = new ForkJoinPool(size);
     }
@@ -135,6 +139,13 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
     synchronized void submit(ForkJoinTask task) {
       pool.submit(task);
     }
+
+    synchronized void shutDownNow() {
+      if (pool == null || pool.isShutdown()) {
+        return;
+      }
+      pool.shutdownNow();
+    }
   }
   // It may be waste resources for each cleaner chore own its pool,
   // so let's make pool for all cleaner chores.
@@ -150,6 +161,13 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
   public static void initChorePool(Configuration conf) {
     if (POOL == null) {
       POOL = new DirScanPool(conf);
+    }
+  }
+
+  public static void shutDownChorePool() {
+    if (POOL != null) {
+      POOL.shutDownNow();
+      POOL = null;
     }
   }
 
@@ -271,9 +289,9 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
       try {
         POOL.latchCountUp();
         if (runCleaner()) {
-          LOG.debug("Cleaned all WALs under {}", oldFileDir);
+          LOG.trace("Cleaned all WALs under {}", oldFileDir);
         } else {
-          LOG.warn("WALs outstanding under {}", oldFileDir);
+          LOG.trace("WALs outstanding under {}", oldFileDir);
         }
       } finally {
         POOL.latchCountDown();
@@ -286,7 +304,7 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
         POOL.updatePool((long) (0.8 * getTimeUnit().toMillis(getPeriod())));
       }
     } else {
-      LOG.debug("Cleaner chore disabled! Not cleaning.");
+      LOG.trace("Cleaner chore disabled! Not cleaning.");
     }
   }
 
@@ -446,6 +464,10 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
     T act() throws IOException;
   }
 
+  /**
+   * Attemps to clean up a directory, its subdirectories, and files.
+   * Return value is true if everything was deleted. false on partial / total failures.
+   */
   private class CleanerTask extends RecursiveTask<Boolean> {
     private final Path dir;
     private final boolean root;
@@ -461,39 +483,37 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
 
     @Override
     protected Boolean compute() {
-      LOG.debug("Cleaning under {}", dir);
+      LOG.trace("Cleaning under {}", dir);
       List<FileStatus> subDirs;
       List<FileStatus> files;
       try {
-        subDirs = getFilteredStatus(status -> status.isDirectory());
-        files = getFilteredStatus(status -> status.isFile());
+        // if dir doesn't exist, we'll get null back for both of these
+        // which will fall through to succeeding.
+        subDirs = getFilteredStatus(FileStatus::isDirectory);
+        files = getFilteredStatus(FileStatus::isFile);
       } catch (IOException ioe) {
-        LOG.warn(dir + " doesn't exist, just skip it. ", ioe);
-        return true;
+        LOG.warn("failed to get FileStatus for contents of '{}'", dir, ioe);
+        return false;
       }
 
-      boolean nullSubDirs = subDirs == null;
-      if (nullSubDirs) {
-        LOG.trace("There is no subdir under {}", dir);
-      }
-      if (files == null) {
-        LOG.trace("There is no file under {}", dir);
+      boolean allFilesDeleted = true;
+      if (!files.isEmpty()) {
+        allFilesDeleted = deleteAction(() -> checkAndDeleteFiles(files), "files");
       }
 
-      int capacity = nullSubDirs ? 0 : subDirs.size();
-      List<CleanerTask> tasks = Lists.newArrayListWithCapacity(capacity);
-      if (!nullSubDirs) {
+      boolean allSubdirsDeleted = true;
+      if (!subDirs.isEmpty()) {
+        List<CleanerTask> tasks = Lists.newArrayListWithCapacity(subDirs.size());
         sortByConsumedSpace(subDirs);
         for (FileStatus subdir : subDirs) {
           CleanerTask task = new CleanerTask(subdir, false);
           tasks.add(task);
           task.fork();
         }
+        allSubdirsDeleted = deleteAction(() -> getCleanResult(tasks), "subdirs");
       }
 
-      boolean result = true;
-      result &= deleteAction(() -> checkAndDeleteFiles(files), "files");
-      result &= deleteAction(() -> getCleanResult(tasks), "subdirs");
+      boolean result = allFilesDeleted && allSubdirsDeleted;
       // if and only if files and subdirs under current dir are deleted successfully, and
       // it is not the root dir, then task will try to delete it.
       if (result && !root) {
@@ -504,14 +524,13 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
 
     /**
      * Get FileStatus with filter.
-     * Pay attention that FSUtils #listStatusWithStatusFilter would return null,
-     * even though status is empty but not null.
      * @param function a filter function
-     * @return filtered FileStatus
-     * @throws IOException if there's no such a directory
+     * @return filtered FileStatus or empty list if dir doesn't exist
+     * @throws IOException if there's an error other than dir not existing
      */
     private List<FileStatus> getFilteredStatus(Predicate<FileStatus> function) throws IOException {
-      return FSUtils.listStatusWithStatusFilter(fs, dir, status -> function.test(status));
+      return Optional.ofNullable(FSUtils.listStatusWithStatusFilter(fs, dir,
+        status -> function.test(status))).orElseGet(Collections::emptyList);
     }
 
     /**
@@ -525,8 +544,18 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
       try {
         LOG.trace("Start deleting {} under {}", type, dir);
         deleted = deletion.act();
+      } catch (PathIsNotEmptyDirectoryException exception) {
+        // N.B. HDFS throws this exception when we try to delete a non-empty directory, but
+        // LocalFileSystem throws a bare IOException. So some test code will get the verbose
+        // message below.
+        LOG.debug("Couldn't delete '{}' yet because it isn't empty. Probably transient. " +
+            "exception details at TRACE.", dir);
+        LOG.trace("Couldn't delete '{}' yet because it isn't empty w/exception.", dir, exception);
+        deleted = false;
       } catch (IOException ioe) {
-        LOG.warn("Could not delete {} under {}; {}", type, dir, ioe);
+        LOG.info("Could not delete {} under {}. might be transient; we'll retry. if it keeps " +
+                  "happening, use following exception when asking on mailing list.",
+                  type, dir, ioe);
         deleted = false;
       }
       LOG.trace("Finish deleting {} under {}, deleted=", type, dir, deleted);

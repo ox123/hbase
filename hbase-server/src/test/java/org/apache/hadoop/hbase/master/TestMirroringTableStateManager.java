@@ -32,7 +32,6 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.zookeeper.KeeperException;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Rule;
@@ -82,7 +81,8 @@ public class TestMirroringTableStateManager {
 
   private TableState.State getTableStateInZK(ZKWatcher watcher, final TableName tableName)
       throws KeeperException, IOException, InterruptedException {
-    String znode = ZNodePaths.joinZNode(watcher.znodePaths.tableZNode, tableName.getNameAsString());
+    String znode = ZNodePaths.joinZNode(watcher.getZNodePaths().tableZNode,
+            tableName.getNameAsString());
     byte [] data = ZKUtil.getData(watcher, znode);
     if (data == null || data.length <= 0) {
       return null;

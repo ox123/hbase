@@ -102,9 +102,9 @@ To disable, set the logging level back to `INFO` level.
 === JVM Garbage Collection Logs
 
 [NOTE]
-----
+====
 All example Garbage Collection logs in this section are based on Java 8 output. The introduction of Unified Logging in Java 9 and newer will result in very different looking logs.
-----
+====
 
 HBase is memory intensive, and using the default GC you can see long pauses in all threads including the _Juliet Pause_ aka "GC of Death". To help debug this or confirm this is happening GC logging can be turned on in the Java virtual machine.
 
@@ -310,6 +310,24 @@ The commands (and arguments) are:
   delete path [version]
   setquota -n|-b val path
 ----
+
+[[trouble.tools.maintenancemode]]
+==== Maintenance Mode
+If the cluster has gotten stuck in some state and the standard techniques aren't making progress,
+ it is possible to restart the cluster in "maintenance mode." This mode features drastically
+ reduced capabilities and surface area, making it easier to enact very low-level changes such
+ as repairing/recovering the `hbase:meta` table.
+
+To enter maintenance mode, set `hbase.master.maintenance_mode` to `true` either in your
+`hbase-site.xml` or via system propery when starting the master process (`-D...=true`). Entering
+and exiting this mode requires a service restart, however the typical use will be when HBase Master
+is already facing startup difficulties.
+
+When maintenance mode is enabled, the master will host all system tables - ensure that it has
+enough memory to do so. RegionServers will not be assigned any regions from user-space tables;
+in fact, they will go completely unused while in maintenance mode. Additionally, the master will
+not load any coprocessors, will not run any normalization or merge/split operations, and will not
+enforce quotas.
 
 [[trouble.tools.external]]
 === External Tools
@@ -590,7 +608,7 @@ See also Jesse Andersen's link:http://blog.cloudera.com/blog/2014/04/how-to-use-
 
 In some situations clients that fetch data from a RegionServer get a LeaseException instead of the usual <<trouble.client.scantimeout>>.
 Usually the source of the exception is `org.apache.hadoop.hbase.regionserver.Leases.removeLease(Leases.java:230)` (line number may vary). It tends to happen in the context of a slow/freezing `RegionServer#next` call.
-It can be prevented by having `hbase.rpc.timeout` > `hbase.regionserver.lease.period`.
+It can be prevented by having `hbase.rpc.timeout` > `hbase.client.scanner.timeout.period`.
 Harsh J investigated the issue as part of the mailing list thread link:https://mail-archives.apache.org/mod_mbox/hbase-user/201209.mbox/%3CCAOcnVr3R-LqtKhFsk8Bhrm-YW2i9O6J6Fhjz2h7q6_sxvwd2yw%40mail.gmail.com%3E[HBase, mail # user - Lease does not exist exceptions]
 
 [[trouble.client.scarylogs]]
@@ -850,9 +868,9 @@ Snapshots::
   When you create a snapshot, HBase retains everything it needs to recreate the table's
   state at that time of the snapshot. This includes deleted cells or expired versions.
   For this reason, your snapshot usage pattern should be well-planned, and you should
-  prune snapshots that you no longer need. Snapshots are stored in `/hbase/.snapshots`,
+  prune snapshots that you no longer need. Snapshots are stored in `/hbase/.hbase-snapshot`,
   and archives needed to restore snapshots are stored in
-  `/hbase/.archive/<_tablename_>/<_region_>/<_column_family_>/`.
+  `/hbase/archive/<_tablename_>/<_region_>/<_column_family_>/`.
 
   *Do not* manage snapshots or archives manually via HDFS. HBase provides APIs and
   HBase Shell commands for managing them. For more information, see <<ops.snapshots>>.
@@ -981,6 +999,57 @@ Caused by: org.apache.hadoop.hbase.util.CommonFSUtils$StreamLacksCapabilityExcep
 
 If you are attempting to run in standalone mode and see this error, please walk back through the section <<quickstart>> and ensure you have included *all* the given configuration settings.
 
+[[trouble.rs.startup.asyncfs]]
+==== RegionServer aborts due to can not initialize access to HDFS
+
+We will try to use _AsyncFSWAL_ for HBase-2.x as it has better performance while consuming less resources. But the problem for _AsyncFSWAL_ is that it hacks into the internal of the DFSClient implementation, so it will easily be broken when upgrading hadoop, even for a simple patch release.
+
+If you do not specify the wal provider, we will try to fall back to the old _FSHLog_ if we fail to initialize _AsyncFSWAL_, but it may not always work. The failure will show up in logs like this:
+
+----
+18/07/02 18:51:06 WARN concurrent.DefaultPromise: An exception was
+thrown by org.apache.hadoop.hbase.io.asyncfs.FanOutOneBlockAsyncDFSOutputHelper$13.operationComplete()
+java.lang.Error: Couldn't properly initialize access to HDFS
+internals. Please update your WAL Provider to not make use of the
+'asyncfs' provider. See HBASE-16110 for more information.
+     at org.apache.hadoop.hbase.io.asyncfs.FanOutOneBlockAsyncDFSOutputSaslHelper.<clinit>(FanOutOneBlockAsyncDFSOutputSaslHelper.java:268)
+     at org.apache.hadoop.hbase.io.asyncfs.FanOutOneBlockAsyncDFSOutputHelper.initialize(FanOutOneBlockAsyncDFSOutputHelper.java:661)
+     at org.apache.hadoop.hbase.io.asyncfs.FanOutOneBlockAsyncDFSOutputHelper.access$300(FanOutOneBlockAsyncDFSOutputHelper.java:118)
+     at org.apache.hadoop.hbase.io.asyncfs.FanOutOneBlockAsyncDFSOutputHelper$13.operationComplete(FanOutOneBlockAsyncDFSOutputHelper.java:720)
+     at org.apache.hadoop.hbase.io.asyncfs.FanOutOneBlockAsyncDFSOutputHelper$13.operationComplete(FanOutOneBlockAsyncDFSOutputHelper.java:715)
+     at org.apache.hbase.thirdparty.io.netty.util.concurrent.DefaultPromise.notifyListener0(DefaultPromise.java:507)
+     at org.apache.hbase.thirdparty.io.netty.util.concurrent.DefaultPromise.notifyListeners0(DefaultPromise.java:500)
+     at org.apache.hbase.thirdparty.io.netty.util.concurrent.DefaultPromise.notifyListenersNow(DefaultPromise.java:479)
+     at org.apache.hbase.thirdparty.io.netty.util.concurrent.DefaultPromise.notifyListeners(DefaultPromise.java:420)
+     at org.apache.hbase.thirdparty.io.netty.util.concurrent.DefaultPromise.trySuccess(DefaultPromise.java:104)
+     at org.apache.hbase.thirdparty.io.netty.channel.DefaultChannelPromise.trySuccess(DefaultChannelPromise.java:82)
+     at org.apache.hbase.thirdparty.io.netty.channel.epoll.AbstractEpollChannel$AbstractEpollUnsafe.fulfillConnectPromise(AbstractEpollChannel.java:638)
+     at org.apache.hbase.thirdparty.io.netty.channel.epoll.AbstractEpollChannel$AbstractEpollUnsafe.finishConnect(AbstractEpollChannel.java:676)
+     at org.apache.hbase.thirdparty.io.netty.channel.epoll.AbstractEpollChannel$AbstractEpollUnsafe.epollOutReady(AbstractEpollChannel.java:552)
+     at org.apache.hbase.thirdparty.io.netty.channel.epoll.EpollEventLoop.processReady(EpollEventLoop.java:394)
+     at org.apache.hbase.thirdparty.io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:304)
+     at org.apache.hbase.thirdparty.io.netty.util.concurrent.SingleThreadEventExecutor$5.run(SingleThreadEventExecutor.java:858)
+     at org.apache.hbase.thirdparty.io.netty.util.concurrent.DefaultThreadFactory$DefaultRunnableDecorator.run(DefaultThreadFactory.java:138)
+     at java.lang.Thread.run(Thread.java:748)
+ Caused by: java.lang.NoSuchMethodException:
+org.apache.hadoop.hdfs.DFSClient.decryptEncryptedDataEncryptionKey(org.apache.hadoop.fs.FileEncryptionInfo)
+     at java.lang.Class.getDeclaredMethod(Class.java:2130)
+     at org.apache.hadoop.hbase.io.asyncfs.FanOutOneBlockAsyncDFSOutputSaslHelper.createTransparentCryptoHelper(FanOutOneBlockAsyncDFSOutputSaslHelper.java:232)
+     at org.apache.hadoop.hbase.io.asyncfs.FanOutOneBlockAsyncDFSOutputSaslHelper.<clinit>(FanOutOneBlockAsyncDFSOutputSaslHelper.java:262)
+     ... 18 more
+----
+
+If you hit this error, please specify _FSHLog_, i.e, _filesystem_, explicitly in your config file.
+
+[source,xml]
+----
+<property>
+  <name>hbase.wal.provider</name>
+  <value>filesystem</value>
+</property>
+----
+
+And do not forget to send an email to the user@hbase.apache.org or dev@hbase.apache.org to report the failure and also your hadoop version, we will try to fix the problem ASAP in the next release.
 
 [[trouble.rs.runtime]]
 === Runtime Errors

@@ -39,6 +39,7 @@ import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.ReplicationTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.util.ToolRunner;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
@@ -46,7 +47,7 @@ import org.junit.experimental.categories.Category;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Category({ReplicationTests.class, LargeTests.class})
+@Category({ ReplicationTests.class, LargeTests.class })
 public class TestReplicationSyncUpTool extends TestReplicationBase {
 
   @ClassRule
@@ -97,7 +98,12 @@ public class TestReplicationSyncUpTool extends TestReplicationBase {
     t2_syncupTarget.addFamily(fam);
     fam = new HColumnDescriptor(noRepfamName);
     t2_syncupTarget.addFamily(fam);
+  }
 
+  @After
+  public void tearDownBase() throws Exception {
+    // Do nothing, just replace the super tearDown. because the super tearDown will use the
+    // out-of-data HBase admin to remove replication peer, which will be result in failure.
   }
 
   /**

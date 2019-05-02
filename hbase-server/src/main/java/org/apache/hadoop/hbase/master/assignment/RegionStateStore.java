@@ -20,6 +20,7 @@ package org.apache.hadoop.hbase.master.assignment;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellBuilderFactory;
 import org.apache.hadoop.hbase.CellBuilderType;
@@ -34,12 +35,13 @@ import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableDescriptor;
-import org.apache.hadoop.hbase.master.MasterFileSystem;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.RegionState.State;
+import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.util.StringUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.wal.WALSplitter;
 import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -67,7 +69,7 @@ public class RegionStateStore {
   }
 
   public interface RegionStateVisitor {
-    void visitRegionState(RegionInfo regionInfo, State state,
+    void visitRegionState(Result result, RegionInfo regionInfo, State state,
       ServerName regionLocation, ServerName lastHost, long openSeqNum);
   }
 
@@ -115,50 +117,53 @@ public class RegionStateStore {
 
       final ServerName lastHost = hrl.getServerName();
       final ServerName regionLocation = getRegionServer(result, replicaId);
-      final long openSeqNum = -1;
+      final long openSeqNum = hrl.getSeqNum();
 
       // TODO: move under trace, now is visible for debugging
-      LOG.info(String.format("Load hbase:meta entry region=%s regionState=%s lastHost=%s regionLocation=%s",
-        regionInfo, state, lastHost, regionLocation));
-
-      visitor.visitRegionState(regionInfo, state, regionLocation, lastHost, openSeqNum);
+      LOG.info(
+        "Load hbase:meta entry region={}, regionState={}, lastHost={}, " +
+          "regionLocation={}, openSeqNum={}",
+        regionInfo.getEncodedName(), state, lastHost, regionLocation, openSeqNum);
+      visitor.visitRegionState(result, regionInfo, state, regionLocation, lastHost, openSeqNum);
     }
   }
 
-  public void updateRegionLocation(RegionStates.RegionStateNode regionStateNode)
+  public void updateRegionLocation(RegionStateNode regionStateNode)
       throws IOException {
     if (regionStateNode.getRegionInfo().isMetaRegion()) {
-      updateMetaLocation(regionStateNode.getRegionInfo(), regionStateNode.getRegionLocation());
+      updateMetaLocation(regionStateNode.getRegionInfo(), regionStateNode.getRegionLocation(),
+        regionStateNode.getState());
     } else {
-      long openSeqNum = regionStateNode.getState() == State.OPEN ?
-          regionStateNode.getOpenSeqNum() : HConstants.NO_SEQNUM;
+      long openSeqNum = regionStateNode.getState() == State.OPEN ? regionStateNode.getOpenSeqNum()
+        : HConstants.NO_SEQNUM;
       updateUserRegionLocation(regionStateNode.getRegionInfo(), regionStateNode.getState(),
-          regionStateNode.getRegionLocation(), regionStateNode.getLastHost(), openSeqNum,
-          regionStateNode.getProcedure().getProcId());
+        regionStateNode.getRegionLocation(), openSeqNum,
+        // The regionStateNode may have no procedure in a test scenario; allow for this.
+        regionStateNode.getProcedure() != null ? regionStateNode.getProcedure().getProcId()
+          : Procedure.NO_PROC_ID);
     }
   }
 
-  private void updateMetaLocation(final RegionInfo regionInfo, final ServerName serverName)
+  private void updateMetaLocation(RegionInfo regionInfo, ServerName serverName, State state)
       throws IOException {
     try {
-      MetaTableLocator.setMetaLocation(master.getZooKeeper(), serverName,
-        regionInfo.getReplicaId(), State.OPEN);
+      MetaTableLocator.setMetaLocation(master.getZooKeeper(), serverName, regionInfo.getReplicaId(),
+        state);
     } catch (KeeperException e) {
       throw new IOException(e);
     }
   }
 
-  private void updateUserRegionLocation(final RegionInfo regionInfo, final State state,
-      final ServerName regionLocation, final ServerName lastHost, final long openSeqNum,
-      final long pid)
-      throws IOException {
+  private void updateUserRegionLocation(RegionInfo regionInfo, State state,
+      ServerName regionLocation, long openSeqNum,
+       long pid) throws IOException {
     long time = EnvironmentEdgeManager.currentTime();
     final int replicaId = regionInfo.getReplicaId();
     final Put put = new Put(MetaTableAccessor.getMetaKeyForRegion(regionInfo), time);
     MetaTableAccessor.addRegionInfo(put, regionInfo);
     final StringBuilder info =
       new StringBuilder("pid=").append(pid).append(" updating hbase:meta row=")
-        .append(regionInfo.getRegionNameAsString()).append(", regionState=").append(state);
+        .append(regionInfo.getEncodedName()).append(", regionState=").append(state);
     if (openSeqNum >= 0) {
       Preconditions.checkArgument(state == State.OPEN && regionLocation != null,
           "Open region should be on a server");
@@ -167,10 +172,11 @@ public class RegionStateStore {
       if (regionInfo.getReplicaId() == RegionInfo.DEFAULT_REPLICA_ID &&
         hasGlobalReplicationScope(regionInfo.getTable())) {
         MetaTableAccessor.addReplicationBarrier(put, openSeqNum);
+        info.append(", repBarrier=").append(openSeqNum);
       }
       info.append(", openSeqNum=").append(openSeqNum);
       info.append(", regionLocation=").append(regionLocation);
-    } else if (regionLocation != null && !regionLocation.equals(lastHost)) {
+    } else if (regionLocation != null) {
       // Ideally, if no regionLocation, write null to the hbase:meta but this will confuse clients
       // currently; they want a server to hit. TODO: Make clients wait if no location.
       put.add(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY)
@@ -211,9 +217,10 @@ public class RegionStateStore {
   }
 
   private long getOpenSeqNumForParentRegion(RegionInfo region) throws IOException {
-    MasterFileSystem mfs = master.getMasterFileSystem();
+    FileSystem walFS = master.getMasterWalManager().getFileSystem();
     long maxSeqId =
-        WALSplitter.getMaxRegionSequenceId(mfs.getFileSystem(), mfs.getRegionDir(region));
+        WALSplitter.getMaxRegionSequenceId(walFS, FSUtils.getWALRegionDir(
+            master.getConfiguration(), region.getTable(), region.getEncodedName()));
     return maxSeqId > 0 ? maxSeqId + 1 : HConstants.NO_SEQNUM;
   }
 
@@ -222,7 +229,7 @@ public class RegionStateStore {
   // ============================================================================================
   public void splitRegion(RegionInfo parent, RegionInfo hriA, RegionInfo hriB,
       ServerName serverName) throws IOException {
-    TableDescriptor htd = getTableDescriptor(parent.getTable());
+    TableDescriptor htd = getDescriptor(parent.getTable());
     long parentOpenSeqNum = HConstants.NO_SEQNUM;
     if (htd.hasGlobalReplicationScope()) {
       parentOpenSeqNum = getOpenSeqNumForParentRegion(parent);
@@ -236,7 +243,7 @@ public class RegionStateStore {
   // ============================================================================================
   public void mergeRegions(RegionInfo child, RegionInfo hriA, RegionInfo hriB,
       ServerName serverName) throws IOException {
-    TableDescriptor htd = getTableDescriptor(child.getTable());
+    TableDescriptor htd = getDescriptor(child.getTable());
     long regionAOpenSeqNum = -1L;
     long regionBOpenSeqNum = -1L;
     if (htd.hasGlobalReplicationScope()) {
@@ -262,7 +269,7 @@ public class RegionStateStore {
   //  Table Descriptors helpers
   // ==========================================================================
   private boolean hasGlobalReplicationScope(TableName tableName) throws IOException {
-    return hasGlobalReplicationScope(getTableDescriptor(tableName));
+    return hasGlobalReplicationScope(getDescriptor(tableName));
   }
 
   private boolean hasGlobalReplicationScope(TableDescriptor htd) {
@@ -273,7 +280,7 @@ public class RegionStateStore {
     return htd != null ? htd.getRegionReplication() : 1;
   }
 
-  private TableDescriptor getTableDescriptor(TableName tableName) throws IOException {
+  private TableDescriptor getDescriptor(TableName tableName) throws IOException {
     return master.getTableDescriptors().get(tableName);
   }
 

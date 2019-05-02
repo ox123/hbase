@@ -23,12 +23,11 @@ import static org.junit.Assert.assertTrue;
 import java.io.IOException;
 import java.util.List;
 import java.util.stream.Collectors;
-
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.TableNotEnabledException;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.DoNotRetryRegionException;
 import org.apache.hadoop.hbase.client.Put;
@@ -120,8 +119,7 @@ public class TestRegionMove {
     // Offline the region and then try to move it. Should fail.
     admin.unassign(regionToMove.getRegionName(), true);
     try {
-      admin.move(regionToMove.getEncodedNameAsBytes(),
-          Bytes.toBytes(rs2.getServerName().toString()));
+      admin.move(regionToMove.getEncodedNameAsBytes(), rs2.getServerName());
       fail();
     } catch (DoNotRetryRegionException e) {
       // We got expected exception
@@ -132,11 +130,12 @@ public class TestRegionMove {
     // Disable the table
     admin.disableTable(tableName);
 
-    // We except a DNRIOE when we try to move a region which isn't open.
-    thrown.expect(TableNotEnabledException.class);
-    thrown.expectMessage(t.getName().toString());
-
-    // Move the region to the other RS -- should fail
-    admin.move(regionToMove.getEncodedNameAsBytes(), Bytes.toBytes(rs2.getServerName().toString()));
+    try {
+      // Move the region to the other RS -- should fail
+      admin.move(regionToMove.getEncodedNameAsBytes(), rs2.getServerName());
+      fail();
+    } catch (DoNotRetryIOException e) {
+      // We got expected exception
+    }
   }
 }

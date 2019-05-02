@@ -140,6 +140,9 @@ public interface Region extends ConfigurationObserver {
   /** @return read requests count for this region */
   long getReadRequestsCount();
 
+  /** @return coprocessor requests count for this region */
+  long getCpRequestsCount();
+
   /** @return filtered read requests count for this region */
   long getFilteredReadRequestsCount();
 
@@ -193,7 +196,7 @@ public interface Region extends ConfigurationObserver {
    */
   enum Operation {
     ANY, GET, PUT, DELETE, SCAN, APPEND, INCREMENT, SPLIT_REGION, MERGE_REGION, BATCH_MUTATE,
-    REPLAY_BATCH_MUTATE, COMPACT_REGION, REPLAY_EVENT, SNAPSHOT
+    REPLAY_BATCH_MUTATE, COMPACT_REGION, REPLAY_EVENT, SNAPSHOT, COMPACT_SWITCH
   }
 
   /**

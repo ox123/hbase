@@ -152,6 +152,7 @@ module Shell
       puts 'HBase Shell'
       puts 'Use "help" to get list of supported commands.'
       puts 'Use "exit" to quit this interactive shell.'
+      puts 'For Reference, please visit: http://hbase.apache.org/book.html#shell'
       print 'Version '
       command('version')
       puts
@@ -280,6 +281,7 @@ Shell.load_command_group(
     get_table
     locate_region
     list_regions
+    clone_table_schema
   ],
   aliases: {
     'describe' => ['desc']
@@ -333,6 +335,7 @@ Shell.load_command_group(
     is_in_maintenance_mode
     close_region
     compact
+    compaction_switch
     flush
     major_compact
     move
@@ -356,6 +359,12 @@ Shell.load_command_group(
     list_deadservers
     clear_deadservers
     clear_block_cache
+    stop_master
+    stop_regionserver
+    rit
+    list_decommissioned_regionservers
+    decommission_regionservers
+    recommission_regionserver
   ],
   # TODO: remove older hlog_roll command
   aliases: {
@@ -378,9 +387,13 @@ Shell.load_command_group(
     append_peer_namespaces
     remove_peer_namespaces
     set_peer_exclude_namespaces
+    append_peer_exclude_namespaces
+    remove_peer_exclude_namespaces
     show_peer_tableCFs
     set_peer_tableCFs
     set_peer_exclude_tableCFs
+    append_peer_exclude_tableCFs
+    remove_peer_exclude_tableCFs
     set_peer_bandwidth
     list_replicated_tables
     append_peer_tableCFs
@@ -390,6 +403,7 @@ Shell.load_command_group(
     get_peer_config
     list_peer_configs
     update_peer_config
+    transit_peer_sync_replication_state
   ]
 )
 
@@ -426,6 +440,10 @@ Shell.load_command_group(
     list_quota_table_sizes
     list_quota_snapshots
     list_snapshot_sizes
+    enable_rpc_throttle
+    disable_rpc_throttle
+    enable_exceed_throttle_quota
+    disable_exceed_throttle_quota
   ]
 )
 
@@ -445,7 +463,6 @@ Shell.load_command_group(
   'procedures',
   full_name: 'PROCEDURES & LOCKS MANAGEMENT',
   commands: %w[
-    abort_procedure
     list_procedures
     list_locks
   ]

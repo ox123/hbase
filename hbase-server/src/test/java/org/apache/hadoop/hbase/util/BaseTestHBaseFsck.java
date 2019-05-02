@@ -29,7 +29,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -309,7 +308,7 @@ public class BaseTestHBaseFsck {
       tbl = null;
     }
 
-    ((ClusterConnection) connection).clearRegionCache();
+    ((ClusterConnection) connection).clearRegionLocationCache();
     deleteTable(TEST_UTIL, tablename);
   }
 
@@ -415,7 +414,8 @@ public class BaseTestHBaseFsck {
     MobFileName mobFileName = MobFileName.create(oldFileName);
     String startKey = mobFileName.getStartKey();
     String date = mobFileName.getDate();
-    return MobFileName.create(startKey, date, UUID.randomUUID().toString().replaceAll("-", ""))
+    return MobFileName.create(startKey, date,
+                              TEST_UTIL.getRandomUUID().toString().replaceAll("-", ""))
       .getFileName();
   }
 

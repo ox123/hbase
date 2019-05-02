@@ -26,7 +26,6 @@ import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -57,10 +56,10 @@ public class CellChunkImmutableSegment extends ImmutableSegment {
     // memStoreLAB cannot be null in this class
     boolean onHeap = getMemStoreLAB().isOnHeap();
     // initiate the heapSize with the size of the segment metadata
-    if(onHeap) {
-      incSize(0, indexOverhead, 0);
+    if (onHeap) {
+      incMemStoreSize(0, indexOverhead, 0, 0);
     } else {
-      incSize(0, 0, indexOverhead);
+      incMemStoreSize(0, 0, indexOverhead, 0);
     }
     // build the new CellSet based on CellArrayMap and update the CellSet of the new Segment
     initializeCellSet(numOfCells, iterator, action);
@@ -79,24 +78,27 @@ public class CellChunkImmutableSegment extends ImmutableSegment {
     boolean onHeap = getMemStoreLAB().isOnHeap();
     // initiate the heapSize with the size of the segment metadata
     if(onHeap) {
-      incSize(0, indexOverhead, 0);
+      incMemStoreSize(0, indexOverhead, 0, 0);
+      memstoreSizing.incMemStoreSize(0, indexOverhead, 0, 0);
     } else {
-      incSize(0, -CSLMImmutableSegment.DEEP_OVERHEAD_CSLM, DEEP_OVERHEAD_CCM);
+      incMemStoreSize(0, -CSLMImmutableSegment.DEEP_OVERHEAD_CSLM, DEEP_OVERHEAD_CCM, 0);
+      memstoreSizing.incMemStoreSize(0, -CSLMImmutableSegment.DEEP_OVERHEAD_CSLM, DEEP_OVERHEAD_CCM,
+        0);
     }
     int numOfCells = segment.getCellsCount();
     // build the new CellSet based on CellChunkMap
     reinitializeCellSet(numOfCells, segment.getScanner(Long.MAX_VALUE), segment.getCellSet(),
-        action);
+        memstoreSizing, action);
     // arrange the meta-data size, decrease all meta-data sizes related to SkipList;
     // add sizes of CellChunkMap entry, decrease also Cell object sizes
     // (reinitializeCellSet doesn't take the care for the sizes)
     long newSegmentSizeDelta = numOfCells*(indexEntrySize()-ClassSize.CONCURRENT_SKIPLISTMAP_ENTRY);
     if(onHeap) {
-      incSize(0, newSegmentSizeDelta, 0);
-      memstoreSizing.incMemStoreSize(0, newSegmentSizeDelta, 0);
+      incMemStoreSize(0, newSegmentSizeDelta, 0, 0);
+      memstoreSizing.incMemStoreSize(0, newSegmentSizeDelta, 0, 0);
     } else {
-      incSize(0, 0, newSegmentSizeDelta);
-      memstoreSizing.incMemStoreSize(0, 0, newSegmentSizeDelta);
+      incMemStoreSize(0, 0, newSegmentSizeDelta, 0);
+      memstoreSizing.incMemStoreSize(0, 0, newSegmentSizeDelta, 0);
 
     }
   }
@@ -150,7 +152,7 @@ public class CellChunkImmutableSegment extends ImmutableSegment {
         // CellChunkMap assumes all cells are allocated on MSLAB.
         // Therefore, cells which are not allocated on MSLAB initially,
         // are copied into MSLAB here.
-        c = copyCellIntoMSLAB(c);
+        c = copyCellIntoMSLAB(c, null); //no memstore sizing object to update
         alreadyCopied = true;
       }
       if (offsetInCurentChunk + ClassSize.CELL_CHUNK_MAP_ENTRY > chunks[currentChunkIdx].size) {
@@ -197,7 +199,7 @@ public class CellChunkImmutableSegment extends ImmutableSegment {
   // This is a service for not-flat immutable segments
   private void reinitializeCellSet(
       int numOfCells, KeyValueScanner segmentScanner, CellSet oldCellSet,
-      MemStoreCompactionStrategy.Action action) {
+      MemStoreSizing memstoreSizing, MemStoreCompactionStrategy.Action action) {
     Cell curCell;
     Chunk[] chunks = allocIndexChunks(numOfCells);
 
@@ -213,7 +215,7 @@ public class CellChunkImmutableSegment extends ImmutableSegment {
           // CellChunkMap assumes all cells are allocated on MSLAB.
           // Therefore, cells which are not allocated on MSLAB initially,
           // are copied into MSLAB here.
-          curCell = copyCellIntoMSLAB(curCell);
+          curCell = copyCellIntoMSLAB(curCell, memstoreSizing);
         }
         if (offsetInCurentChunk + ClassSize.CELL_CHUNK_MAP_ENTRY > chunks[currentChunkIdx].size) {
           // continue to the next metadata chunk
@@ -257,7 +259,7 @@ public class CellChunkImmutableSegment extends ImmutableSegment {
 
     offset = ByteBufferUtils.putInt(idxBuffer, offset, dataChunkID);    // write data chunk id
     offset = ByteBufferUtils.putInt(idxBuffer, offset, cell.getOffset());          // offset
-    offset = ByteBufferUtils.putInt(idxBuffer, offset, KeyValueUtil.length(cell)); // length
+    offset = ByteBufferUtils.putInt(idxBuffer, offset, cell.getSerializedSize()); // length
     offset = ByteBufferUtils.putLong(idxBuffer, offset, cell.getSequenceId());     // seqId
 
     return offset;
@@ -315,7 +317,7 @@ public class CellChunkImmutableSegment extends ImmutableSegment {
     return chunks;
   }
 
-  private Cell copyCellIntoMSLAB(Cell cell) {
+  private Cell copyCellIntoMSLAB(Cell cell, MemStoreSizing memstoreSizing) {
     // Take care for a special case when a cell is copied from on-heap to (probably off-heap) MSLAB.
     // The cell allocated as an on-heap JVM object (byte array) occupies slightly different
     // amount of memory, than when the cell serialized and allocated on the MSLAB.
@@ -332,8 +334,10 @@ public class CellChunkImmutableSegment extends ImmutableSegment {
     long newCellSize = getCellLength(cell);
     long heapOverhead = newHeapSize - oldHeapSize;
     long offHeapOverhead = newOffHeapSize - oldOffHeapSize;
-    //TODO: maybe need to update the dataSize of the region
-    incSize(newCellSize - oldCellSize, heapOverhead, offHeapOverhead);
+    incMemStoreSize(newCellSize - oldCellSize, heapOverhead, offHeapOverhead, 0);
+    if(memstoreSizing != null) {
+      memstoreSizing.incMemStoreSize(newCellSize - oldCellSize, heapOverhead, offHeapOverhead, 0);
+    }
     return cell;
   }
 }

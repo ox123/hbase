@@ -73,6 +73,11 @@ public interface MetricsRegionWrapper {
   long getReadRequestCount();
 
   /**
+   * Get the total number of CoprocessorService requests that have been issued against this region
+   */
+  long getCpRequestCount();
+
+  /**
    * Get the total number of filtered read requests that have been issued against this region
    */
   long getFilteredReadRequestCount();
@@ -101,6 +106,8 @@ public interface MetricsRegionWrapper {
    * Get the total number of mutations that have been issued against this region.
    */
   long getWriteRequestCount();
+
+  long getTotalRequestCount();
 
   long getNumFilesCompacted();
 

@@ -57,6 +57,8 @@ public class HTableDescriptor implements TableDescriptor, Comparable<HTableDescr
   public static final Bytes OWNER_KEY = TableDescriptorBuilder.OWNER_KEY;
   public static final String READONLY = TableDescriptorBuilder.READONLY;
   public static final String COMPACTION_ENABLED = TableDescriptorBuilder.COMPACTION_ENABLED;
+  public static final String SPLIT_ENABLED = TableDescriptorBuilder.SPLIT_ENABLED;
+  public static final String MERGE_ENABLED = TableDescriptorBuilder.MERGE_ENABLED;
   public static final String MEMSTORE_FLUSHSIZE = TableDescriptorBuilder.MEMSTORE_FLUSHSIZE;
   public static final String FLUSH_POLICY = TableDescriptorBuilder.FLUSH_POLICY;
   public static final String IS_ROOT = "IS_ROOT";
@@ -65,6 +67,10 @@ public class HTableDescriptor implements TableDescriptor, Comparable<HTableDescr
   public static final String REGION_REPLICATION = TableDescriptorBuilder.REGION_REPLICATION;
   public static final String REGION_MEMSTORE_REPLICATION = TableDescriptorBuilder.REGION_MEMSTORE_REPLICATION;
   public static final String NORMALIZATION_ENABLED = TableDescriptorBuilder.NORMALIZATION_ENABLED;
+  public static final String NORMALIZER_TARGET_REGION_COUNT =
+      TableDescriptorBuilder.NORMALIZER_TARGET_REGION_COUNT;
+  public static final String NORMALIZER_TARGET_REGION_SIZE =
+      TableDescriptorBuilder.NORMALIZER_TARGET_REGION_SIZE;
   public static final String PRIORITY = TableDescriptorBuilder.PRIORITY;
   public static final boolean DEFAULT_READONLY = TableDescriptorBuilder.DEFAULT_READONLY;
   public static final boolean DEFAULT_COMPACTION_ENABLED = TableDescriptorBuilder.DEFAULT_COMPACTION_ENABLED;
@@ -188,7 +194,7 @@ public class HTableDescriptor implements TableDescriptor, Comparable<HTableDescr
    * @param value The value. If null, removes the setting.
    */
   public HTableDescriptor setValue(String key, String value) {
-    getDelegateeForModification().setValue(Bytes.toBytes(key), Bytes.toBytes(value));
+    getDelegateeForModification().setValue(key, value);
     return this;
   }
 
@@ -268,6 +274,49 @@ public class HTableDescriptor implements TableDescriptor, Comparable<HTableDescr
   }
 
   /**
+   * Check if the region split enable flag of the table is true. If flag is
+   * false then no split will be done.
+   *
+   * @return true if table region split enabled
+   */
+  @Override
+  public boolean isSplitEnabled() {
+    return delegatee.isSplitEnabled();
+  }
+
+  /**
+   * Setting the table region split enable flag.
+   *
+   * @param isEnable True if enable split.
+   */
+  public HTableDescriptor setSplitEnabled(final boolean isEnable) {
+    getDelegateeForModification().setSplitEnabled(isEnable);
+    return this;
+  }
+
+
+  /**
+   * Check if the region merge enable flag of the table is true. If flag is
+   * false then no merge will be done.
+   *
+   * @return true if table region merge enabled
+   */
+  @Override
+  public boolean isMergeEnabled() {
+    return delegatee.isMergeEnabled();
+  }
+
+  /**
+   * Setting the table region merge enable flag.
+   *
+   * @param isEnable True if enable merge.
+   */
+  public HTableDescriptor setMergeEnabled(final boolean isEnable) {
+    getDelegateeForModification().setMergeEnabled(isEnable);
+    return this;
+  }
+
+  /**
    * Check if normalization enable flag of the table is true. If flag is
    * false then no region normalizer won't attempt to normalize this table.
    *
@@ -285,6 +334,26 @@ public class HTableDescriptor implements TableDescriptor, Comparable<HTableDescr
    */
   public HTableDescriptor setNormalizationEnabled(final boolean isEnable) {
     getDelegateeForModification().setNormalizationEnabled(isEnable);
+    return this;
+  }
+
+  @Override
+  public int getNormalizerTargetRegionCount() {
+    return getDelegateeForModification().getNormalizerTargetRegionCount();
+  }
+
+  public HTableDescriptor setNormalizerTargetRegionCount(final int regionCount) {
+    getDelegateeForModification().setNormalizerTargetRegionCount(regionCount);
+    return this;
+  }
+
+  @Override
+  public long getNormalizerTargetRegionSize() {
+    return getDelegateeForModification().getNormalizerTargetRegionSize();
+  }
+
+  public HTableDescriptor setNormalizerTargetRegionSize(final long regionSize) {
+    getDelegateeForModification().setNormalizerTargetRegionSize(regionSize);
     return this;
   }
 
@@ -472,6 +541,7 @@ public class HTableDescriptor implements TableDescriptor, Comparable<HTableDescr
    * @return Name of this table and then a map of all of the column family
    * descriptors (with only the non-default column family attributes)
    */
+  @Override
   public String toStringCustomizedValues() {
     return delegatee.toStringCustomizedValues();
   }

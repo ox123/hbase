@@ -374,7 +374,7 @@ possible configurations would overwhelm and obscure the important.
     <description>ZooKeeper session timeout in milliseconds. It is used in two different ways.
       First, this value is used in the ZK client that HBase uses to connect to the ensemble.
       It is also used by HBase when it starts a ZK server and it is passed as the 'maxSessionTimeout'.
-      See http://hadoop.apache.org/zookeeper/docs/current/zookeeperProgrammers.html#ch_zkSessions.
+      See https://zookeeper.apache.org/doc/current/zookeeperProgrammers.html#ch_zkSessions.
       For example, if an HBase region server connects to a ZK ensemble that's also managed
       by HBase, then the session timeout will be the one specified by this configuration.
       But, a region server that connects to an ensemble managed with a different configuration
@@ -419,14 +419,14 @@ possible configurations would overwhelm and obscure the important.
     <name>hbase.zookeeper.peerport</name>
     <value>2888</value>
     <description>Port used by ZooKeeper peers to talk to each other.
-    See http://hadoop.apache.org/zookeeper/docs/r3.1.1/zookeeperStarted.html#sc_RunningReplicatedZooKeeper
+    See https://zookeeper.apache.org/doc/r3.4.10/zookeeperStarted.html#sc_RunningReplicatedZooKeeper
     for more information.</description>
   </property>
   <property>
     <name>hbase.zookeeper.leaderport</name>
     <value>3888</value>
     <description>Port used by ZooKeeper for leader election.
-    See http://hadoop.apache.org/zookeeper/docs/r3.1.1/zookeeperStarted.html#sc_RunningReplicatedZooKeeper
+    See https://zookeeper.apache.org/doc/r3.4.10/zookeeperStarted.html#sc_RunningReplicatedZooKeeper
     for more information.</description>
   </property>
   <!-- End of properties used to generate ZooKeeper host:port quorum list. -->
@@ -617,6 +617,11 @@ possible configurations would overwhelm and obscure the important.
     <description>Period at which the region normalizer runs in the Master.</description>
   </property>
   <property>
+    <name>hbase.normalizer.min.region.count</name>
+    <value>3</value>
+    <description>configure the minimum number of regions</description>
+  </property>
+  <property>
     <name>hbase.regions.slop</name>
     <value>0.001</value>
     <description>Rebalance if any regionserver has average + (average * slop) regions.
@@ -727,6 +732,13 @@ possible configurations would overwhelm and obscure the important.
       (one StoreFile is written per flush of MemStore), a compaction is run to rewrite all
       StoreFiles into a single StoreFile. Larger values delay compaction, but when compaction does
       occur, it takes longer to complete.</description>
+  </property>
+  <property>
+    <name>hbase.regionserver.compaction.enabled</name>
+    <value>true</value>
+    <description>Enable/disable compactions on by setting true/false.
+      We can further switch compactions dynamically with the
+      compaction_switch shell command.</description>
   </property>
   <property>
     <name>hbase.hstore.flusher.count</name>
@@ -889,6 +901,11 @@ possible configurations would overwhelm and obscure the important.
       The default thread pool size if parallel-seeking feature enabled.</description>
   </property>
   <property>
+    <name>hfile.block.cache.policy</name>
+    <value>LRU</value>
+    <description>The eviction policy for the L1 block cache (LRU or TinyLFU).</description>
+  </property>
+  <property>
     <name>hfile.block.cache.size</name>
     <value>0.4</value>
     <description>Percentage of maximum heap (-Xmx setting) to allocate to block cache
@@ -913,8 +930,10 @@ possible configurations would overwhelm and obscure the important.
     <name>hbase.bucketcache.ioengine</name>
     <value></value>
     <description>Where to store the contents of the bucketcache. One of: offheap,
-    file, files or mmap. If a file or files, set it to file(s):PATH_TO_FILE.
-    mmap means the content will be in an mmaped file. Use mmap:PATH_TO_FILE.
+    file, files, mmap or pmem. If a file or files, set it to file(s):PATH_TO_FILE.
+    mmap means the content will be in an mmaped file. Use mmap:PATH_TO_FILE. 'pmem'
+    is bucket cache over a file on the persistent memory device.
+    Use pmem:PATH_TO_FILE.
     See http://hbase.apache.org/book.html#offheap.blockcache for more information.
     </description>
   </property>
@@ -1309,6 +1328,15 @@ possible configurations would overwhelm and obscure the important.
     <description>Name of the failsafe snapshot taken by the restore operation.
       You can use the {snapshot.name}, {table.name} and {restore.timestamp} variables
       to create a name based on what you are restoring.</description>
+  </property>
+  <property>
+    <name>hbase.snapshot.working.dir</name>
+    <value></value>
+    <description>Location where the snapshotting process will occur. The location of the
+      completed snapshots will not change, but the temporary directory where the snapshot
+      process occurs will be set to this location. This can be a separate filesystem than
+      the root directory, for performance increase purposes. See HBASE-21098 for more
+      information</description>
   </property>
   <property>
     <name>hbase.server.compactchecker.interval.multiplier</name>

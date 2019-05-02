@@ -239,6 +239,22 @@ public interface TableDescriptor {
   boolean isCompactionEnabled();
 
   /**
+   * Check if the split enable flag of the table is true. If flag is false
+   * then no region split will be done.
+   *
+   * @return true if table region split enabled
+   */
+  boolean isSplitEnabled();
+
+  /**
+   * Check if the merge enable flag of the table is true. If flag is false
+   * then no region merge will be done.
+   *
+   * @return true if table region merge enabled
+   */
+  boolean isMergeEnabled();
+
+  /**
    * Checks if this table is <code> hbase:meta </code> region.
    *
    * @return true if this table is <code> hbase:meta </code> region
@@ -261,12 +277,34 @@ public interface TableDescriptor {
   boolean isNormalizationEnabled();
 
   /**
+   * Check if there is the target region count. If so, the normalize plan will
+   * be calculated based on the target region count.
+   *
+   * @return target region count after normalize done
+   */
+  int getNormalizerTargetRegionCount();
+
+  /**
+   * Check if there is the target region size. If so, the normalize plan will
+   * be calculated based on the target region size.
+   *
+   * @return target region size after normalize done
+   */
+  long getNormalizerTargetRegionSize();
+
+  /**
    * Check if the readOnly flag of the table is set. If the readOnly flag is set
    * then the contents of the table can only be read from but not modified.
    *
    * @return true if all columns in the table should be read only
    */
   boolean isReadOnly();
+
+  /**
+   * @return Name of this table and then a map of all of the column family descriptors (with only
+   *         the non-default column family attributes)
+   */
+  String toStringCustomizedValues();
 
   /**
    * Check if any of the table's cfs' replication scope are set to

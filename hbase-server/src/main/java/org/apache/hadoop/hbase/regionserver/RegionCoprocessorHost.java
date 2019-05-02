@@ -36,6 +36,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CompareOperator;
 import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.RawCellBuilder;
 import org.apache.hadoop.hbase.RawCellBuilderFactory;
 import org.apache.hadoop.hbase.ServerName;
@@ -66,7 +67,6 @@ import org.apache.hadoop.hbase.coprocessor.ObserverContext;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
-import org.apache.hadoop.hbase.coprocessor.RegionObserver.MutationType;
 import org.apache.hadoop.hbase.filter.ByteArrayComparable;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
 import org.apache.hadoop.hbase.io.Reference;
@@ -350,7 +350,16 @@ public class RegionCoprocessorHost
           cl = CoprocessorHost.class.getClassLoader();
         }
         Thread.currentThread().setContextClassLoader(cl);
-        cl.loadClass(attr.getClassName());
+        if (cl instanceof CoprocessorClassLoader) {
+          String[] includedClassPrefixes = null;
+          if (conf.get(HConstants.CP_HTD_ATTR_INCLUSION_KEY) != null) {
+            String prefixes = attr.conf.get(HConstants.CP_HTD_ATTR_INCLUSION_KEY);
+            includedClassPrefixes = prefixes.split(";");
+          }
+          ((CoprocessorClassLoader)cl).loadClass(attr.getClassName(), includedClassPrefixes);
+        } else {
+          cl.loadClass(attr.getClassName());
+        }
       } catch (ClassNotFoundException e) {
         throw new IOException("Class " + attr.getClassName() + " cannot be loaded", e);
       } finally {
@@ -1681,16 +1690,32 @@ public class RegionCoprocessorHost
         });
   }
 
-  public Cell postMutationBeforeWAL(final MutationType opType, final Mutation mutation,
-      final Cell oldCell, Cell newCell) throws IOException {
+  public List<Pair<Cell, Cell>> postIncrementBeforeWAL(final Mutation mutation,
+      final List<Pair<Cell, Cell>> cellPairs) throws IOException {
     if (this.coprocEnvironments.isEmpty()) {
-      return newCell;
+      return cellPairs;
     }
     return execOperationWithResult(
-        new ObserverOperationWithResult<RegionObserver, Cell>(regionObserverGetter, newCell) {
+        new ObserverOperationWithResult<RegionObserver, List<Pair<Cell, Cell>>>(
+            regionObserverGetter, cellPairs) {
           @Override
-          public Cell call(RegionObserver observer) throws IOException {
-            return observer.postMutationBeforeWAL(this, opType, mutation, oldCell, getResult());
+          public List<Pair<Cell, Cell>> call(RegionObserver observer) throws IOException {
+            return observer.postIncrementBeforeWAL(this, mutation, getResult());
+          }
+        });
+  }
+
+  public List<Pair<Cell, Cell>> postAppendBeforeWAL(final Mutation mutation,
+      final List<Pair<Cell, Cell>> cellPairs) throws IOException {
+    if (this.coprocEnvironments.isEmpty()) {
+      return cellPairs;
+    }
+    return execOperationWithResult(
+        new ObserverOperationWithResult<RegionObserver, List<Pair<Cell, Cell>>>(
+            regionObserverGetter, cellPairs) {
+          @Override
+          public List<Pair<Cell, Cell>> call(RegionObserver observer) throws IOException {
+            return observer.postAppendBeforeWAL(this, mutation, getResult());
           }
         });
   }

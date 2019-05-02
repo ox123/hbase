@@ -17,23 +17,27 @@
  */
 package org.apache.hadoop.hbase.client;
 
+import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.master.HMaster;
-import org.apache.hadoop.hbase.master.NoSuchProcedureException;
 import org.apache.hadoop.hbase.master.RegionState;
 import org.apache.hadoop.hbase.master.ServerManager;
 import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
@@ -81,23 +85,19 @@ public class TestAsyncRegionAdminApi extends TestAsyncAdminBase {
 
     // Region is assigned now. Let's assign it again.
     // Master should not abort, and region should stay assigned.
-    admin.assign(hri.getRegionName()).get();
     try {
-      am.waitForAssignment(hri);
-      fail("Expected NoSuchProcedureException");
-    } catch (NoSuchProcedureException e) {
+      admin.assign(hri.getRegionName()).get();
+      fail("Should fail when assigning an already onlined region");
+    } catch (ExecutionException e) {
       // Expected
+      assertThat(e.getCause(), instanceOf(DoNotRetryRegionException.class));
     }
+    assertFalse(am.getRegionStates().getRegionStateNode(hri).isInTransition());
     assertTrue(regionStates.getRegionState(hri).isOpened());
 
     // unassign region
     admin.unassign(hri.getRegionName(), true).get();
-    try {
-      am.waitForAssignment(hri);
-      fail("Expected NoSuchProcedureException");
-    } catch (NoSuchProcedureException e) {
-      // Expected
-    }
+    assertFalse(am.getRegionStates().getRegionStateNode(hri).isInTransition());
     assertTrue(regionStates.getRegionState(hri).isClosed());
   }
 
@@ -180,23 +180,18 @@ public class TestAsyncRegionAdminApi extends TestAsyncAdminBase {
   public void testGetOnlineRegions() throws Exception {
     createTableAndGetOneRegion(tableName);
     AtomicInteger regionServerCount = new AtomicInteger(0);
-    TEST_UTIL
-        .getHBaseCluster()
-        .getLiveRegionServerThreads()
-        .stream()
-        .map(rsThread -> rsThread.getRegionServer())
-        .forEach(
-          rs -> {
-            ServerName serverName = rs.getServerName();
-            try {
-              assertEquals(admin.getRegions(serverName).get().size(), rs
-                  .getRegions().size());
-            } catch (Exception e) {
-              fail("admin.getOnlineRegions() method throws a exception: " + e.getMessage());
-            }
-            regionServerCount.incrementAndGet();
-          });
-    assertEquals(2, regionServerCount.get());
+    TEST_UTIL.getHBaseCluster().getLiveRegionServerThreads().stream()
+      .map(rsThread -> rsThread.getRegionServer()).forEach(rs -> {
+        ServerName serverName = rs.getServerName();
+        try {
+          assertEquals(admin.getRegions(serverName).get().size(), rs.getRegions().size());
+        } catch (Exception e) {
+          fail("admin.getOnlineRegions() method throws a exception: " + e.getMessage());
+        }
+        regionServerCount.incrementAndGet();
+      });
+    assertEquals(TEST_UTIL.getHBaseCluster().getLiveRegionServerThreads().size(),
+      regionServerCount.get());
   }
 
   @Test
@@ -307,6 +302,42 @@ public class TestAsyncRegionAdminApi extends TestAsyncAdminBase {
   }
 
   @Test
+  public void testCompactionSwitchStates() throws Exception {
+    // Create a table with regions
+    byte[] family = Bytes.toBytes("family");
+    byte[][] families = {family, Bytes.add(family, Bytes.toBytes("2")),
+        Bytes.add(family, Bytes.toBytes("3"))};
+    createTableWithDefaultConf(tableName, null, families);
+    loadData(tableName, families, 3000, 8);
+    List<Region> regions = new ArrayList<>();
+    TEST_UTIL
+        .getHBaseCluster()
+        .getLiveRegionServerThreads()
+        .forEach(rsThread -> regions.addAll(rsThread.getRegionServer().getRegions(tableName)));
+    CompletableFuture<Map<ServerName, Boolean>> listCompletableFuture =
+        admin.compactionSwitch(true, new ArrayList<>());
+    Map<ServerName, Boolean> pairs = listCompletableFuture.get();
+    for (Map.Entry<ServerName, Boolean> p : pairs.entrySet()) {
+      assertEquals("Default compaction state, expected=enabled actual=disabled",
+          true, p.getValue());
+    }
+    CompletableFuture<Map<ServerName, Boolean>> listCompletableFuture1 =
+        admin.compactionSwitch(false, new ArrayList<>());
+    Map<ServerName, Boolean> pairs1 = listCompletableFuture1.get();
+    for (Map.Entry<ServerName, Boolean> p : pairs1.entrySet()) {
+      assertEquals("Last compaction state, expected=enabled actual=disabled",
+          true, p.getValue());
+    }
+    CompletableFuture<Map<ServerName, Boolean>> listCompletableFuture2 =
+        admin.compactionSwitch(true, new ArrayList<>());
+    Map<ServerName, Boolean> pairs2 = listCompletableFuture2.get();
+    for (Map.Entry<ServerName, Boolean> p : pairs2.entrySet()) {
+      assertEquals("Last compaction state, expected=disabled actual=enabled",
+          false, p.getValue());
+    }
+  }
+
+  @Test
   public void testCompact() throws Exception {
     compactionTest(TableName.valueOf("testCompact1"), 8, CompactionState.MAJOR, false);
     compactionTest(TableName.valueOf("testCompact2"), 15, CompactionState.MINOR, false);
@@ -389,6 +420,26 @@ public class TestAsyncRegionAdminApi extends TestAsyncAdminBase {
       } else {
         assertTrue(1 < countAfterSingleFamily);
       }
+    }
+  }
+
+  @Test
+  public void testNonExistentTableCompaction() {
+    testNonExistentTableCompaction(CompactionState.MINOR);
+    testNonExistentTableCompaction(CompactionState.MAJOR);
+  }
+
+  private void testNonExistentTableCompaction(CompactionState compactionState) {
+    try {
+      if (compactionState == CompactionState.MINOR) {
+        admin.compact(TableName.valueOf("NonExistentTable")).get();
+      } else {
+        admin.majorCompact(TableName.valueOf("NonExistentTable")).get();
+      }
+      fail("Expected TableNotFoundException when table doesn't exist");
+    } catch (Exception e) {
+      // expected.
+      assertTrue(e.getCause() instanceof TableNotFoundException);
     }
   }
 

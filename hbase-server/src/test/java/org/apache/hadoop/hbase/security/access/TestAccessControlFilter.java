@@ -24,7 +24,6 @@ import static org.junit.Assert.assertTrue;
 import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
@@ -87,7 +86,7 @@ public class TestAccessControlFilter extends SecureTestUtil {
     conf.setBoolean(AccessControlConstants.CF_ATTRIBUTE_EARLY_OUT, false);
 
     TEST_UTIL.startMiniCluster();
-    TEST_UTIL.waitTableEnabled(AccessControlLists.ACL_TABLE_NAME.getName(), 50000);
+    TEST_UTIL.waitTableEnabled(PermissionStorage.ACL_TABLE_NAME.getName(), 50000);
 
     READER = User.createUserForTesting(conf, "reader", new String[0]);
     LIMITED = User.createUserForTesting(conf, "limited", new String[0]);
@@ -132,7 +131,7 @@ public class TestAccessControlFilter extends SecureTestUtil {
       public Object run() throws Exception {
         Configuration conf = new Configuration(TEST_UTIL.getConfiguration());
         // force a new RS connection
-        conf.set("testkey", UUID.randomUUID().toString());
+        conf.set("testkey", TEST_UTIL.getRandomUUID().toString());
         Connection connection = ConnectionFactory.createConnection(conf);
         Table t = connection.getTable(TABLE);
         try {
@@ -161,7 +160,7 @@ public class TestAccessControlFilter extends SecureTestUtil {
       public Object run() throws Exception {
         Configuration conf = new Configuration(TEST_UTIL.getConfiguration());
         // force a new RS connection
-        conf.set("testkey", UUID.randomUUID().toString());
+        conf.set("testkey", TEST_UTIL.getRandomUUID().toString());
         Connection connection = ConnectionFactory.createConnection(conf);
         Table t = connection.getTable(TABLE);
         try {
@@ -189,7 +188,7 @@ public class TestAccessControlFilter extends SecureTestUtil {
       public Object run() throws Exception {
         Configuration conf = new Configuration(TEST_UTIL.getConfiguration());
         // force a new RS connection
-        conf.set("testkey", UUID.randomUUID().toString());
+        conf.set("testkey", TEST_UTIL.getRandomUUID().toString());
         Connection connection = ConnectionFactory.createConnection(conf);
         Table t = connection.getTable(TABLE);
         try {

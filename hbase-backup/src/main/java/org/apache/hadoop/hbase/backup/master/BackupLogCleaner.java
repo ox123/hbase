@@ -24,7 +24,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.commons.collections.MapUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
@@ -41,6 +40,8 @@ import org.apache.yetus.audience.InterfaceAudience;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.org.apache.commons.collections4.MapUtils;
 
 /**
  * Implementation of a log cleaner that checks if a log is still scheduled for incremental backup
@@ -96,7 +97,6 @@ public class BackupLogCleaner extends BaseLogCleanerDelegate {
         LOG.warn("Backup system table is not available: {}", tnfe.getMessage());
         return files;
       }
-
       List<FileStatus> list = new ArrayList<>();
       Map<FileStatus, Boolean> walFilesDeletableMap = table.areWALFilesDeletable(files);
       for (Map.Entry<FileStatus, Boolean> entry: walFilesDeletableMap.entrySet()) {

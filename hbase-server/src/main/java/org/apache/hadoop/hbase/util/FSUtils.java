@@ -43,6 +43,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -54,6 +55,7 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.fs.permission.FsAction;
@@ -841,6 +843,15 @@ public abstract class FSUtils extends CommonFSUtils {
     return frags;
   }
 
+  public static void renameFile(FileSystem fs, Path src, Path dst) throws IOException {
+    if (fs.exists(dst) && !fs.delete(dst, false)) {
+      throw new IOException("Can not delete " + dst);
+    }
+    if (!fs.rename(src, dst)) {
+      throw new IOException("Can not rename from " + src + " to " + dst);
+    }
+  }
+
   /**
    * A {@link PathFilter} that returns only regular files.
    */
@@ -937,6 +948,11 @@ public abstract class FSUtils extends CommonFSUtils {
     }
   }
 
+  public void recoverFileLease(final FileSystem fs, final Path p, Configuration conf)
+      throws IOException {
+    recoverFileLease(fs, p, conf, null);
+  }
+
   /**
    * Recover file lease. Used when a file might be suspect
    * to be had been left open by another process.
@@ -1018,7 +1034,7 @@ public abstract class FSUtils extends CommonFSUtils {
     // assumes we are in a table dir.
     List<FileStatus> rds = listStatusWithStatusFilter(fs, tableDir, new RegionDirFilter(fs));
     if (rds == null) {
-      return new ArrayList<>();
+      return Collections.emptyList();
     }
     List<Path> regionDirs = new ArrayList<>(rds.size());
     for (FileStatus rdfs: rds) {
@@ -1085,7 +1101,7 @@ public abstract class FSUtils extends CommonFSUtils {
   public static List<Path> getReferenceFilePaths(final FileSystem fs, final Path familyDir) throws IOException {
     List<FileStatus> fds = listStatusWithStatusFilter(fs, familyDir, new ReferenceFileFilter(fs));
     if (fds == null) {
-      return new ArrayList<>();
+      return Collections.emptyList();
     }
     List<Path> referenceFiles = new ArrayList<>(fds.size());
     for (FileStatus fdfs: fds) {
@@ -1741,4 +1757,45 @@ public abstract class FSUtils extends CommonFSUtils {
     }
   }
 
+  public static List<Path> copyFilesParallel(FileSystem srcFS, Path src, FileSystem dstFS, Path dst,
+      Configuration conf, int threads) throws IOException {
+    ExecutorService pool = Executors.newFixedThreadPool(threads);
+    List<Future<Void>> futures = new ArrayList<>();
+    List<Path> traversedPaths;
+    try {
+      traversedPaths = copyFiles(srcFS, src, dstFS, dst, conf, pool, futures);
+      for (Future<Void> future : futures) {
+        future.get();
+      }
+    } catch (ExecutionException | InterruptedException | IOException e) {
+      throw new IOException("copy snapshot reference files failed", e);
+    } finally {
+      pool.shutdownNow();
+    }
+    return traversedPaths;
+  }
+
+  private static List<Path> copyFiles(FileSystem srcFS, Path src, FileSystem dstFS, Path dst,
+      Configuration conf, ExecutorService pool, List<Future<Void>> futures) throws IOException {
+    List<Path> traversedPaths = new ArrayList<>();
+    traversedPaths.add(dst);
+    FileStatus currentFileStatus = srcFS.getFileStatus(src);
+    if (currentFileStatus.isDirectory()) {
+      if (!dstFS.mkdirs(dst)) {
+        throw new IOException("create dir failed: " + dst);
+      }
+      FileStatus[] subPaths = srcFS.listStatus(src);
+      for (FileStatus subPath : subPaths) {
+        traversedPaths.addAll(copyFiles(srcFS, subPath.getPath(), dstFS,
+          new Path(dst, subPath.getPath().getName()), conf, pool, futures));
+      }
+    } else {
+      Future<Void> future = pool.submit(() -> {
+        FileUtil.copy(srcFS, src, dstFS, dst, false, false, conf);
+        return null;
+      });
+      futures.add(future);
+    }
+    return traversedPaths;
+  }
 }

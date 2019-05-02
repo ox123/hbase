@@ -381,7 +381,7 @@ public final class ProtobufUtil {
       get.setCacheBlocks(proto.getCacheBlocks());
     }
     if (proto.hasMaxVersions()) {
-      get.setMaxVersions(proto.getMaxVersions());
+      get.readVersions(proto.getMaxVersions());
     }
     if (proto.hasStoreLimit()) {
       get.setMaxResultsPerColumnFamily(proto.getStoreLimit());
@@ -937,9 +937,7 @@ public final class ProtobufUtil {
     if (!scan.includeStartRow()) {
       scanBuilder.setIncludeStartRow(false);
     }
-    if (scan.includeStopRow()) {
-      scanBuilder.setIncludeStopRow(true);
-    }
+    scanBuilder.setIncludeStopRow(scan.includeStopRow());
     if (scan.getReadType() != Scan.ReadType.DEFAULT) {
       scanBuilder.setReadType(toReadType(scan.getReadType()));
     }
@@ -1559,7 +1557,7 @@ public final class ProtobufUtil {
 
 
   /**
-   * @see {@link #buildGetServerInfoRequest()}
+   * @see #buildGetServerInfoRequest()
    */
   private static GetServerInfoRequest GET_SERVER_INFO_REQUEST =
     GetServerInfoRequest.newBuilder().build();

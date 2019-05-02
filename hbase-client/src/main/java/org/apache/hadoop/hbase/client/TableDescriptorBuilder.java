@@ -93,6 +93,22 @@ public class TableDescriptorBuilder {
 
   /**
    * Used by HBase Shell interface to access this metadata
+   * attribute which denotes if the table is split enabled.
+   */
+  @InterfaceAudience.Private
+  public static final String SPLIT_ENABLED = "SPLIT_ENABLED";
+  private static final Bytes SPLIT_ENABLED_KEY = new Bytes(Bytes.toBytes(SPLIT_ENABLED));
+
+  /**
+   * Used by HBase Shell interface to access this metadata
+   * attribute which denotes if the table is merge enabled.
+   */
+  @InterfaceAudience.Private
+  public static final String MERGE_ENABLED = "MERGE_ENABLED";
+  private static final Bytes MERGE_ENABLED_KEY = new Bytes(Bytes.toBytes(MERGE_ENABLED));
+
+  /**
+   * Used by HBase Shell interface to access this metadata
    * attribute which represents the maximum size of the memstore after which its
    * contents are flushed onto the disk.
    */
@@ -150,6 +166,17 @@ public class TableDescriptorBuilder {
   private static final Bytes NORMALIZATION_ENABLED_KEY
           = new Bytes(Bytes.toBytes(NORMALIZATION_ENABLED));
 
+  @InterfaceAudience.Private
+  public static final String NORMALIZER_TARGET_REGION_COUNT =
+      "NORMALIZER_TARGET_REGION_COUNT";
+  private static final Bytes NORMALIZER_TARGET_REGION_COUNT_KEY =
+      new Bytes(Bytes.toBytes(NORMALIZER_TARGET_REGION_COUNT));
+
+  @InterfaceAudience.Private
+  public static final String NORMALIZER_TARGET_REGION_SIZE = "NORMALIZER_TARGET_REGION_SIZE";
+  private static final Bytes NORMALIZER_TARGET_REGION_SIZE_KEY =
+      new Bytes(Bytes.toBytes(NORMALIZER_TARGET_REGION_SIZE));
+
   /**
    * Default durability for HTD is USE_DEFAULT, which defaults to HBase-global
    * default value
@@ -175,6 +202,16 @@ public class TableDescriptorBuilder {
    * Constant that denotes whether the table is compaction enabled by default
    */
   public static final boolean DEFAULT_COMPACTION_ENABLED = true;
+
+  /**
+   * Constant that denotes whether the table is split enabled by default
+   */
+  public static final boolean DEFAULT_SPLIT_ENABLED = true;
+
+  /**
+   * Constant that denotes whether the table is merge enabled by default
+   */
+  public static final boolean DEFAULT_MERGE_ENABLED = true;
 
   /**
    * Constant that denotes whether the table is normalized by default.
@@ -209,11 +246,28 @@ public class TableDescriptorBuilder {
     RESERVED_KEYWORDS.add(IS_META_KEY);
   }
 
+  /**
+   * @deprecated namespace table has been folded into the ns family in meta table, do not use this
+   *             any more.
+   */
   @InterfaceAudience.Private
+  @Deprecated
   public final static String NAMESPACE_FAMILY_INFO = "info";
+
+  /**
+   * @deprecated namespace table has been folded into the ns family in meta table, do not use this
+   *             any more.
+   */
   @InterfaceAudience.Private
+  @Deprecated
   public final static byte[] NAMESPACE_FAMILY_INFO_BYTES = Bytes.toBytes(NAMESPACE_FAMILY_INFO);
+
+  /**
+   * @deprecated namespace table has been folded into the ns family in meta table, do not use this
+   *             any more.
+   */
   @InterfaceAudience.Private
+  @Deprecated
   public final static byte[] NAMESPACE_COL_DESC_BYTES = Bytes.toBytes("d");
 
   /**
@@ -234,22 +288,21 @@ public class TableDescriptorBuilder {
       CP_HTD_ATTR_VALUE_PARAM_VALUE_PATTERN + "),?");
   private static final Pattern CP_HTD_ATTR_KEY_PATTERN =
     Pattern.compile("^coprocessor\\$([0-9]+)$", Pattern.CASE_INSENSITIVE);
+
   /**
    * Table descriptor for namespace table
+   * @deprecated We have folded the data in namespace table into meta table, so do not use it any
+   *             more.
    */
-  // TODO We used to set CacheDataInL1 for NS table. When we have BucketCache in file mode, now the
-  // NS data goes to File mode BC only. Test how that affect the system. If too much, we have to
-  // rethink about adding back the setCacheDataInL1 for NS table.
-  public static final TableDescriptor NAMESPACE_TABLEDESC
-    = TableDescriptorBuilder.newBuilder(TableName.NAMESPACE_TABLE_NAME)
+  @Deprecated
+  public static final TableDescriptor NAMESPACE_TABLEDESC =
+    TableDescriptorBuilder.newBuilder(TableName.NAMESPACE_TABLE_NAME)
       .setColumnFamily(ColumnFamilyDescriptorBuilder.newBuilder(NAMESPACE_FAMILY_INFO_BYTES)
-        // Ten is arbitrary number.  Keep versions to help debugging.
-        .setMaxVersions(10)
-        .setInMemory(true)
-        .setBlocksize(8 * 1024)
-        .setScope(HConstants.REPLICATION_SCOPE_LOCAL)
-        .build())
+        // Ten is arbitrary number. Keep versions to help debugging.
+        .setMaxVersions(10).setInMemory(true).setBlocksize(8 * 1024)
+        .setScope(HConstants.REPLICATION_SCOPE_LOCAL).build())
       .build();
+
   private final ModifyableTableDescriptor desc;
 
   /**
@@ -360,6 +413,16 @@ public class TableDescriptorBuilder {
     return this;
   }
 
+  public TableDescriptorBuilder setSplitEnabled(final boolean isEnable) {
+    desc.setSplitEnabled(isEnable);
+    return this;
+  }
+
+  public TableDescriptorBuilder setMergeEnabled(final boolean isEnable) {
+    desc.setMergeEnabled(isEnable);
+    return this;
+  }
+
   public TableDescriptorBuilder setDurability(Durability durability) {
     desc.setDurability(durability);
     return this;
@@ -377,6 +440,16 @@ public class TableDescriptorBuilder {
 
   public TableDescriptorBuilder setMemStoreFlushSize(long memstoreFlushSize) {
     desc.setMemStoreFlushSize(memstoreFlushSize);
+    return this;
+  }
+
+  public TableDescriptorBuilder setNormalizerTargetRegionCount(final int regionCount) {
+    desc.setNormalizerTargetRegionCount(regionCount);
+    return this;
+  }
+
+  public TableDescriptorBuilder setNormalizerTargetRegionSize(final long regionSize) {
+    desc.setNormalizerTargetRegionSize(regionSize);
     return this;
   }
 
@@ -699,6 +772,48 @@ public class TableDescriptorBuilder {
     }
 
     /**
+     * Check if the split enable flag of the table is true. If flag is false then no split will be
+     * done.
+     *
+     * @return true if table region split enabled
+     */
+    @Override
+    public boolean isSplitEnabled() {
+      return getOrDefault(SPLIT_ENABLED_KEY, Boolean::valueOf, DEFAULT_SPLIT_ENABLED);
+    }
+
+    /**
+     * Setting the table region split enable flag.
+     * @param isEnable True if enable region split.
+     *
+     * @return the modifyable TD
+     */
+    public ModifyableTableDescriptor setSplitEnabled(final boolean isEnable) {
+      return setValue(SPLIT_ENABLED_KEY, Boolean.toString(isEnable));
+    }
+
+    /**
+     * Check if the region merge enable flag of the table is true. If flag is false then no merge
+     * will be done.
+     *
+     * @return true if table region merge enabled
+     */
+    @Override
+    public boolean isMergeEnabled() {
+      return getOrDefault(MERGE_ENABLED_KEY, Boolean::valueOf, DEFAULT_MERGE_ENABLED);
+    }
+
+    /**
+     * Setting the table region merge enable flag.
+     * @param isEnable True if enable region merge.
+     *
+     * @return the modifyable TD
+     */
+    public ModifyableTableDescriptor setMergeEnabled(final boolean isEnable) {
+      return setValue(MERGE_ENABLED_KEY, Boolean.toString(isEnable));
+    }
+
+    /**
      * Check if normalization enable flag of the table is true. If flag is false
      * then no region normalizer won't attempt to normalize this table.
      *
@@ -710,6 +825,27 @@ public class TableDescriptorBuilder {
     }
 
     /**
+     * Check if there is the target region count. If so, the normalize plan will be calculated based
+     * on the target region count.
+     * @return target region count after normalize done
+     */
+    @Override
+    public int getNormalizerTargetRegionCount() {
+      return getOrDefault(NORMALIZER_TARGET_REGION_COUNT_KEY, Integer::valueOf,
+        Integer.valueOf(-1));
+    }
+
+    /**
+     * Check if there is the target region size. If so, the normalize plan will be calculated based
+     * on the target region size.
+     * @return target region size after normalize done
+     */
+    @Override
+    public long getNormalizerTargetRegionSize() {
+      return getOrDefault(NORMALIZER_TARGET_REGION_SIZE_KEY, Long::valueOf, Long.valueOf(-1));
+    }
+
+    /**
      * Setting the table normalization enable flag.
      *
      * @param isEnable True if enable normalization.
@@ -717,6 +853,24 @@ public class TableDescriptorBuilder {
      */
     public ModifyableTableDescriptor setNormalizationEnabled(final boolean isEnable) {
       return setValue(NORMALIZATION_ENABLED_KEY, Boolean.toString(isEnable));
+    }
+
+    /**
+     * Setting the target region count of table normalization .
+     * @param regionCount the target region count.
+     * @return the modifyable TD
+     */
+    public ModifyableTableDescriptor setNormalizerTargetRegionCount(final int regionCount) {
+      return setValue(NORMALIZER_TARGET_REGION_COUNT_KEY, Integer.toString(regionCount));
+    }
+
+    /**
+     * Setting the target region size of table normalization.
+     * @param regionSize the target region size.
+     * @return the modifyable TD
+     */
+    public ModifyableTableDescriptor setNormalizerTargetRegionSize(final long regionSize) {
+      return setValue(NORMALIZER_TARGET_REGION_SIZE_KEY, Long.toString(regionSize));
     }
 
     /**
@@ -927,6 +1081,7 @@ public class TableDescriptorBuilder {
      * @return Name of this table and then a map of all of the column family
      * descriptors (with only the non-default column family attributes)
      */
+    @Override
     public String toStringCustomizedValues() {
       StringBuilder s = new StringBuilder();
       s.append('\'').append(Bytes.toString(name.getName())).append('\'');

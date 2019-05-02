@@ -84,10 +84,14 @@ public class TestClientOperationTimeout {
   @BeforeClass
   public static void setUpClass() throws Exception {
     TESTING_UTIL.getConfiguration().setLong(HConstants.HBASE_CLIENT_OPERATION_TIMEOUT, 500);
+    TESTING_UTIL.getConfiguration().setLong(HConstants.HBASE_CLIENT_META_OPERATION_TIMEOUT, 500);
     TESTING_UTIL.getConfiguration().setLong(HConstants.HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD, 500);
     TESTING_UTIL.getConfiguration().setLong(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 1);
 
-    TESTING_UTIL.startMiniCluster(1, 1, null, null, DelayedRegionServer.class);
+    // Set RegionServer class and use default values for other options.
+    StartMiniClusterOption option = StartMiniClusterOption.builder()
+        .rsClass(DelayedRegionServer.class).build();
+    TESTING_UTIL.startMiniCluster(option);
   }
 
   @Before

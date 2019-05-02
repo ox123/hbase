@@ -28,6 +28,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellBuilder;
@@ -60,7 +61,6 @@ import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.coprocessor.Batch;
-import org.apache.hadoop.hbase.filter.CompareFilter;
 import org.apache.hadoop.hbase.ipc.CoprocessorRpcChannel;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.testclassification.ReplicationTests;
@@ -127,7 +127,7 @@ public class TestWALEntrySinkFilter {
     conf.setClass(WALEntrySinkFilter.WAL_ENTRY_FILTER_KEY,
         IfTimeIsGreaterThanBOUNDARYWALEntrySinkFilterImpl.class, WALEntrySinkFilter.class);
     conf.setClass("hbase.client.connection.impl", DevNullConnection.class,
-        Connection.class);
+      Connection.class);
     ReplicationSink sink = new ReplicationSink(conf, STOPPABLE);
     // Create some dumb walentries.
     List< org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.WALEntry > entries =
@@ -378,11 +378,6 @@ public class TestWALEntrySinkFilter {
             }
 
             @Override
-            public boolean checkAndPut(byte[] row, byte[] family, byte[] qualifier, CompareFilter.CompareOp compareOp, byte[] value, Put put) throws IOException {
-              return false;
-            }
-
-            @Override
             public boolean checkAndPut(byte[] row, byte[] family, byte[] qualifier, CompareOperator op, byte[] value, Put put) throws IOException {
               return false;
             }
@@ -399,11 +394,6 @@ public class TestWALEntrySinkFilter {
 
             @Override
             public boolean checkAndDelete(byte[] row, byte[] family, byte[] qualifier, byte[] value, Delete delete) throws IOException {
-              return false;
-            }
-
-            @Override
-            public boolean checkAndDelete(byte[] row, byte[] family, byte[] qualifier, CompareFilter.CompareOp compareOp, byte[] value, Delete delete) throws IOException {
               return false;
             }
 
@@ -473,11 +463,6 @@ public class TestWALEntrySinkFilter {
             }
 
             @Override
-            public boolean checkAndMutate(byte[] row, byte[] family, byte[] qualifier, CompareFilter.CompareOp compareOp, byte[] value, RowMutations mutation) throws IOException {
-              return false;
-            }
-
-            @Override
             public boolean checkAndMutate(byte[] row, byte[] family, byte[] qualifier, CompareOperator op, byte[] value, RowMutations mutation) throws IOException {
               return false;
             }
@@ -539,11 +524,19 @@ public class TestWALEntrySinkFilter {
 
             @Override
             public void setOperationTimeout(int operationTimeout) {
+            }
 
+            @Override
+            public RegionLocator getRegionLocator() throws IOException {
+              return null;
             }
           };
         }
       };
+    }
+
+    @Override
+    public void clearRegionLocationCache() {
     }
   }
 }

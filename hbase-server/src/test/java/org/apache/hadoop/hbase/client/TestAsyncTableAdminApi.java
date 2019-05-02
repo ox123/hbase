@@ -36,7 +36,9 @@ import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.TableExistsException;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.master.LoadBalancer;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
@@ -98,7 +100,7 @@ public class TestAsyncTableAdminApi extends TestAsyncAdminBase {
     final TableName tableName3 = TableName.valueOf(tableName.getNameAsString() + "_3");
     TableDescriptorBuilder builder = TableDescriptorBuilder.newBuilder(tableName3);
     builder.setColumnFamily(ColumnFamilyDescriptorBuilder.of(FAMILY));
-    admin.createTable(builder.build(), "a".getBytes(), "z".getBytes(), 3).join();
+    admin.createTable(builder.build(), Bytes.toBytes("a"), Bytes.toBytes("z"), 3).join();
     regionLocations =
       AsyncMetaTableAccessor.getTableHRegionLocations(metaTable, Optional.of(tableName3)).get();
     assertEquals("Table should have only 3 region", 3, regionLocations.size());
@@ -107,7 +109,7 @@ public class TestAsyncTableAdminApi extends TestAsyncAdminBase {
     builder = TableDescriptorBuilder.newBuilder(tableName4);
     builder.setColumnFamily(ColumnFamilyDescriptorBuilder.of(FAMILY));
     try {
-      admin.createTable(builder.build(), "a".getBytes(), "z".getBytes(), 2).join();
+      admin.createTable(builder.build(), Bytes.toBytes("a"), Bytes.toBytes("z"), 2).join();
       fail("Should not be able to create a table with only 2 regions using this API.");
     } catch (CompletionException e) {
       assertTrue(e.getCause() instanceof IllegalArgumentException);
@@ -131,7 +133,7 @@ public class TestAsyncTableAdminApi extends TestAsyncAdminBase {
     boolean tablesOnMaster = LoadBalancer.isTablesOnMaster(TEST_UTIL.getConfiguration());
     createTableWithDefaultConf(tableName, splitKeys);
 
-    boolean tableAvailable = admin.isTableAvailable(tableName, splitKeys).get();
+    boolean tableAvailable = admin.isTableAvailable(tableName).get();
     assertTrue("Table should be created with splitKyes + 1 rows in META", tableAvailable);
 
     AsyncTable<AdvancedScanResultConsumer> metaTable = ASYNC_CONN.getTable(META_TABLE_NAME);
@@ -307,9 +309,9 @@ public class TestAsyncTableAdminApi extends TestAsyncAdminBase {
   @Test
   public void testCreateTableWithEmptyRowInTheSplitKeys() throws Exception {
     byte[][] splitKeys = new byte[3][];
-    splitKeys[0] = "region1".getBytes();
+    splitKeys[0] = Bytes.toBytes("region1");
     splitKeys[1] = HConstants.EMPTY_BYTE_ARRAY;
-    splitKeys[2] = "region2".getBytes();
+    splitKeys[2] = Bytes.toBytes("region2");
     try {
       createTableWithDefaultConf(tableName, splitKeys);
       fail("Test case should fail as empty split key is passed.");
@@ -365,5 +367,97 @@ public class TestAsyncTableAdminApi extends TestAsyncAdminBase {
     } else {
       assertEquals(1, TEST_UTIL.getHBaseCluster().getRegions(tableName).size());
     }
+  }
+
+  @Test
+  public void testCloneTableSchema() throws Exception {
+    final TableName newTableName = TableName.valueOf(tableName.getNameAsString() + "_new");
+    testCloneTableSchema(tableName, newTableName, false);
+  }
+
+  @Test
+  public void testCloneTableSchemaPreservingSplits() throws Exception {
+    final TableName newTableName = TableName.valueOf(tableName.getNameAsString() + "_new");
+    testCloneTableSchema(tableName, newTableName, true);
+  }
+
+  private void testCloneTableSchema(final TableName tableName,
+      final TableName newTableName, boolean preserveSplits) throws Exception {
+    byte[][] splitKeys = new byte[2][];
+    splitKeys[0] = Bytes.toBytes(4);
+    splitKeys[1] = Bytes.toBytes(8);
+    int NUM_FAMILYS = 2;
+    int NUM_REGIONS = 3;
+    int BLOCK_SIZE = 1024;
+    int TTL = 86400;
+    boolean BLOCK_CACHE = false;
+
+    // Create the table
+    TableDescriptor tableDesc = TableDescriptorBuilder
+        .newBuilder(tableName)
+        .setColumnFamily(ColumnFamilyDescriptorBuilder.of(FAMILY_0))
+        .setColumnFamily(ColumnFamilyDescriptorBuilder
+            .newBuilder(FAMILY_1)
+            .setBlocksize(BLOCK_SIZE)
+            .setBlockCacheEnabled(BLOCK_CACHE)
+            .setTimeToLive(TTL)
+            .build()).build();
+    admin.createTable(tableDesc, splitKeys).join();
+
+    assertEquals(NUM_REGIONS, TEST_UTIL.getHBaseCluster().getRegions(tableName).size());
+    assertTrue("Table should be created with splitKyes + 1 rows in META",
+        admin.isTableAvailable(tableName).get());
+
+    // Clone & Verify
+    admin.cloneTableSchema(tableName, newTableName, preserveSplits).join();
+    TableDescriptor newTableDesc = admin.getDescriptor(newTableName).get();
+
+    assertEquals(NUM_FAMILYS, newTableDesc.getColumnFamilyCount());
+    assertEquals(BLOCK_SIZE, newTableDesc.getColumnFamily(FAMILY_1).getBlocksize());
+    assertEquals(BLOCK_CACHE, newTableDesc.getColumnFamily(FAMILY_1).isBlockCacheEnabled());
+    assertEquals(TTL, newTableDesc.getColumnFamily(FAMILY_1).getTimeToLive());
+    TEST_UTIL.verifyTableDescriptorIgnoreTableName(tableDesc, newTableDesc);
+
+    if (preserveSplits) {
+      assertEquals(NUM_REGIONS, TEST_UTIL.getHBaseCluster().getRegions(newTableName).size());
+      assertTrue("New table should be created with splitKyes + 1 rows in META",
+          admin.isTableAvailable(newTableName).get());
+    } else {
+      assertEquals(1, TEST_UTIL.getHBaseCluster().getRegions(newTableName).size());
+    }
+  }
+
+  @Test
+  public void testCloneTableSchemaWithNonExistentSourceTable() throws Exception {
+    final TableName newTableName = TableName.valueOf(tableName.getNameAsString() + "_new");
+    // test for non-existent source table
+    try {
+      admin.cloneTableSchema(tableName, newTableName, false).join();
+      fail("Should have failed when source table doesn't exist.");
+    } catch (CompletionException e) {
+      assertTrue(e.getCause() instanceof TableNotFoundException);
+    }
+  }
+
+  @Test
+  public void testCloneTableSchemaWithExistentDestinationTable() throws Exception {
+    final TableName newTableName = TableName.valueOf(tableName.getNameAsString() + "_new");
+    byte[] FAMILY_0 = Bytes.toBytes("cf0");
+    TEST_UTIL.createTable(tableName, FAMILY_0);
+    TEST_UTIL.createTable(newTableName, FAMILY_0);
+    // test for existent destination table
+    try {
+      admin.cloneTableSchema(tableName, newTableName, false).join();
+      fail("Should have failed when destination table exists.");
+    } catch (CompletionException e) {
+      assertTrue(e.getCause() instanceof TableExistsException);
+    }
+  }
+
+  @Test
+  public void testIsTableAvailableWithInexistantTable() throws Exception {
+    final TableName newTableName = TableName.valueOf(tableName.getNameAsString() + "_new");
+    // test for inexistant table
+    assertFalse(admin.isTableAvailable(newTableName).get());
   }
 }

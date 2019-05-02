@@ -23,8 +23,6 @@ import static org.junit.Assert.fail;
 import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
@@ -35,6 +33,7 @@ import org.apache.hadoop.hbase.coprocessor.MasterCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.MasterCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.MasterObserver;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.security.AccessDeniedException;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
@@ -44,6 +43,9 @@ import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
 
@@ -57,7 +59,7 @@ public class TestFailedProcCleanup {
   public static final HBaseClassTestRule CLASS_RULE =
       HBaseClassTestRule.forClass(TestFailedProcCleanup.class);
 
-  private static final Log LOG = LogFactory.getLog(TestFailedProcCleanup.class);
+  private static final Logger LOG = LoggerFactory.getLogger(TestFailedProcCleanup.class);
 
   protected static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static Configuration conf;
@@ -87,7 +89,7 @@ public class TestFailedProcCleanup {
       LOG.debug("Ignoring exception: ", e);
       Thread.sleep(evictionDelay * 3);
     }
-    List<Procedure<?>> procedureInfos =
+    List<Procedure<MasterProcedureEnv>> procedureInfos =
         TEST_UTIL.getMiniHBaseCluster().getMaster().getMasterProcedureExecutor().getProcedures();
     for (Procedure procedureInfo : procedureInfos) {
       if (procedureInfo.getProcName().equals("CreateTableProcedure")
@@ -108,7 +110,7 @@ public class TestFailedProcCleanup {
       LOG.debug("Ignoring exception: ", e);
       Thread.sleep(evictionDelay * 3);
     }
-    List<Procedure<?>> procedureInfos =
+    List<Procedure<MasterProcedureEnv>> procedureInfos =
         TEST_UTIL.getMiniHBaseCluster().getMaster().getMasterProcedureExecutor().getProcedures();
     for (Procedure procedureInfo : procedureInfos) {
       if (procedureInfo.getProcName().equals("CreateTableProcedure")

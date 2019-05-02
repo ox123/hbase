@@ -39,9 +39,11 @@
       <shaded.prefix>org.apache.hadoop.hbase.shaded</shaded.prefix>
     </properties>
     <modules>
+        <module>hbase-shaded-client-byo-hadoop</module>
         <module>hbase-shaded-client</module>
         <module>hbase-shaded-mapreduce</module>
         <module>hbase-shaded-check-invariants</module>
+        <module>hbase-shaded-with-hadoop-check-invariants</module>
     </modules>
     <dependencies>
       <dependency>
@@ -118,6 +120,7 @@
                     <artifactId>maven-shade-plugin</artifactId>
                     <executions>
                         <execution>
+                            <id>aggregate-into-a-jar-with-relocated-third-parties</id>
                             <phase>package</phase>
                             <goals>
                                 <goal>shade</goal>
@@ -129,6 +132,15 @@
                                 <shadeTestJar>false</shadeTestJar>
                                 <artifactSet>
                                     <excludes>
+                                        <!-- exclude J2EE modules that come in for JDK11+ -->
+                                        <exclude>javax.annotation:javax.annotation-api</exclude>
+                                        <!-- exclude J2EE modules that come in for JDK11+ (since hadoop-3.2.0) -->
+                                        <exclude>javax.activation:javax.activation-api</exclude>
+                                        <!-- default to excluding Hadoop, have module that want
+                                             to include it redefine the exclude list -->
+                                        <exclude>org.apache.hadoop:*</exclude>
+                                        <!-- the rest of this needs to be kept in sync with any
+                                             hadoop-including module -->
                                         <exclude>org.apache.hbase:hbase-resource-bundle</exclude>
                                         <exclude>org.slf4j:*</exclude>
                                         <exclude>com.google.code.findbugs:*</exclude>
@@ -160,6 +172,10 @@
                                     <relocation>
                                         <pattern>com.fasterxml</pattern>
                                         <shadedPattern>${shaded.prefix}.com.fasterxml</shadedPattern>
+                                    </relocation>
+                                    <relocation>
+                                        <pattern>com.github.benmanes.caffeine</pattern>
+                                        <shadedPattern>${shaded.prefix}.com.github.benmanes.caffeine</shadedPattern>
                                     </relocation>
                                     <relocation>
                                         <pattern>com.google</pattern>
@@ -198,6 +214,11 @@
                                         <shadedPattern>${shaded.prefix}.com.zaxxer</shadedPattern>
                                     </relocation>
 
+                                    <!-- dnsjava -->
+                                    <relocation>
+                                        <pattern>org.xbill</pattern>
+                                        <shadedPattern>${shaded.prefix}.org.xbill</shadedPattern>
+                                    </relocation>
 
                                     <!-- netty family -->
                                     <relocation>
@@ -217,8 +238,12 @@
 
                                     <!-- top level org -->
                                     <relocation>
-                                        <pattern>org.codehaus</pattern>
-                                        <shadedPattern>${shaded.prefix}.org.codehaus</shadedPattern>
+                                      <pattern>org.checkerframework</pattern>
+                                      <shadedPattern>${shaded.prefix}.org.checkerframework</shadedPattern>
+                                    </relocation>
+                                    <relocation>
+                                      <pattern>org.codehaus</pattern>
+                                      <shadedPattern>${shaded.prefix}.org.codehaus</shadedPattern>
                                     </relocation>
                                     <relocation>
                                         <pattern>org.eclipse</pattern>
@@ -331,6 +356,10 @@
 
                                     <!-- org.apache.commons not including logging -->
                                     <relocation>
+                                        <pattern>org.apache.commons.validator</pattern>
+                                        <shadedPattern>${shaded.prefix}.org.apache.commons.validator</shadedPattern>
+                                    </relocation>
+                                    <relocation>
                                         <pattern>org.apache.commons.beanutils</pattern>
                                         <shadedPattern>${shaded.prefix}.org.apache.commons.beanutils</shadedPattern>
                                     </relocation>
@@ -402,6 +431,10 @@
                                         <pattern>org.apache.commons.codec</pattern>
                                         <shadedPattern>${shaded.prefix}.org.apache.commons.codec</shadedPattern>
                                     </relocation>
+                                    <relocation>
+                                        <pattern>org.apache.commons.text</pattern>
+                                        <shadedPattern>${shaded.prefix}.org.apache.commons.text</shadedPattern>
+                                    </relocation>
 
                                     <!-- top level net-->
                                     <relocation>
@@ -418,8 +451,6 @@
                                         <pattern>org.junit</pattern>
                                         <shadedPattern>${shaded.prefix}.org.junit</shadedPattern>
                                     </relocation>
-
-
                                 </relocations>
                                 <transformers>
                                   <!-- Need to filter out some extraneous license files.
@@ -441,6 +472,16 @@
                                   </transformer>
                                 </transformers>
                                 <filters>
+                                    <!-- remove utility classes which are not required from dnsjava -->
+                                    <filter>
+                                        <artifact>dnsjava:dnsjava</artifact>
+                                        <excludes>
+                                            <exclude>dig*</exclude>
+                                            <exclude>jnamed*</exclude>
+                                            <exclude>lookup*</exclude>
+                                            <exclude>update*</exclude>
+                                        </excludes>
+                                    </filter>
                                   <filter>
                                     <!-- this is a signed osgi bundle -->
                                     <artifact>org.eclipse.jetty.orbit:javax.servlet.jsp.jstl</artifact>
@@ -450,11 +491,22 @@
                                     </excludes>
                                   </filter>
                                   <filter>
+                                    <!-- Duplication of classes that ship in commons-collections 2.x and 3.x
+                                         If we stop bundling a relevant commons-collections artifact we'll
+                                         need to revisit. See: https://s.apache.org/e09o
+                                    -->
+                                    <artifact>commons-beanutils:commons-beanutils-core</artifact>
+                                    <excludes>
+                                      <exclude>org/apache/commons/collections/*.class</exclude>
+                                    </excludes>
+                                  </filter>
+                                  <filter>
                                     <!-- server side webapps that we don't need -->
                                     <artifact>org.apache.hbase:hbase-server</artifact>
                                     <excludes>
                                       <exclude>hbase-webapps/*</exclude>
                                       <exclude>hbase-webapps/**/*</exclude>
+                                      <exclude>**/*_jsp.class</exclude>
                                     </excludes>
                                   </filter>
                                   <filter>

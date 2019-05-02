@@ -23,11 +23,11 @@
   import="java.util.ArrayList"
   import="java.util.Collection"
   import="java.util.Collections"
-  import="java.util.Comparator"
+  import="java.util.HashMap"
   import="java.util.LinkedHashMap"
   import="java.util.List"
   import="java.util.Map"
-  import="java.util.HashMap"
+  import="java.util.Objects"
   import="java.util.TreeMap"
   import="org.apache.commons.lang3.StringEscapeUtils"
   import="org.apache.hadoop.conf.Configuration"
@@ -77,15 +77,8 @@
 <%
   HMaster master = (HMaster)getServletContext().getAttribute(HMaster.MASTER);
   Configuration conf = master.getConfiguration();
-
-  MetaTableLocator metaTableLocator = new MetaTableLocator();
   String fqtn = request.getParameter("name");
   final String escaped_fqtn = StringEscapeUtils.escapeHtml4(fqtn);
-  String sortKey = request.getParameter("sort");
-  String reverse = request.getParameter("reverse");
-  final boolean reverseOrder = (reverse==null||!reverse.equals("false"));
-  String showWholeKey = request.getParameter("showwhole");
-  final boolean showWhole = (showWholeKey!=null && showWholeKey.equals("true"));
   Table table;
   String tableHeader;
   boolean withReplica = false;
@@ -139,10 +132,10 @@ if ( fqtn != null ) {
   try {
   table = master.getConnection().getTable(TableName.valueOf(fqtn));
   if (table.getTableDescriptor().getRegionReplication() > 1) {
-    tableHeader = "<h2>Table Regions</h2><table class=\"table table-striped\" style=\"table-layout: fixed; word-wrap: break-word;\"><tr><th>Name</th><th>Region Server</th><th>ReadRequests</th><th>WriteRequests</th><th>StorefileSize</th><th>Num.Storefiles</th><th>MemSize</th><th>Locality</th><th>Start Key</th><th>End Key</th><th>ReplicaID</th></tr>";
+    tableHeader = "<h2>Table Regions</h2><table id=\"tableRegionTable\" class=\"tablesorter table table-striped\" style=\"table-layout: fixed; word-wrap: break-word;\"><thead><tr><th>Name</th><th>Region Server</th><th>ReadRequests</th><th>WriteRequests</th><th>StorefileSize</th><th>Num.Storefiles</th><th>MemSize</th><th>Locality</th><th>Start Key</th><th>End Key</th><th>ReplicaID</th></tr></thead>";
     withReplica = true;
   } else {
-    tableHeader = "<h2>Table Regions</h2><table class=\"table table-striped\" style=\"table-layout: fixed; word-wrap: break-word;\"><tr><th>Name</th><th>Region Server</th><th>ReadRequests</th><th>WriteRequests</th><th>StorefileSize</th><th>Num.Storefiles</th><th>MemSize</th><th>Locality</th><th>Start Key</th><th>End Key</th></tr>";
+    tableHeader = "<h2>Table Regions</h2><table id=\"tableRegionTable\" class=\"tablesorter table table-striped\" style=\"table-layout: fixed; word-wrap: break-word;\"><thead><tr><th>Name</th><th>Region Server</th><th>ReadRequests</th><th>WriteRequests</th><th>StorefileSize</th><th>Num.Storefiles</th><th>MemSize</th><th>Locality</th><th>Start Key</th><th>End Key</th></tr></thead>";
   }
   if ( !readOnly && action != null ) {
 %>
@@ -179,13 +172,13 @@ if ( fqtn != null ) {
     %> Compact request accepted. <%
     } else if (action.equals("merge")) {
         if (left != null && left.length() > 0 && right != null && right.length() > 0) {
-            admin.mergeRegions(Bytes.toBytesBinary(left), Bytes.toBytesBinary(right), false);
+            admin.mergeRegionsAsync(Bytes.toBytesBinary(left), Bytes.toBytesBinary(right), false);
         }
         %> Merge request accepted. <%
     }
   }
 %>
-<p>Go <a href="javascript:history.back()">Back</a>, or wait for the redirect.
+<jsp:include page="redirect.jsp" />
 </div>
 <%
   } else {
@@ -201,12 +194,13 @@ if ( fqtn != null ) {
   if(fqtn.equals(TableName.META_TABLE_NAME.getNameAsString())) {
 %>
 <%= tableHeader %>
+<tbody>
 <%
   // NOTE: Presumes meta with one or more replicas
   for (int j = 0; j < numMetaReplicas; j++) {
     RegionInfo meta = RegionReplicaUtil.getRegionInfoForReplica(
                             RegionInfoBuilder.FIRST_META_REGIONINFO, j);
-    ServerName metaLocation = metaTableLocator.waitMetaRegionLocation(master.getZooKeeper(), j, 1);
+    ServerName metaLocation = MetaTableLocator.waitMetaRegionLocation(master.getZooKeeper(), j, 1);
     for (int i = 0; i < 1; i++) {
       String hostAndPort = "";
       String readReq = "N/A";
@@ -255,6 +249,7 @@ if ( fqtn != null ) {
 </tr>
 <%  } %>
 <%} %>
+</tbody>
 </table>
 <%} else {
   Admin admin = master.getConnection().getAdmin();
@@ -315,10 +310,11 @@ if ( fqtn != null ) {
     if (quota == null || !quota.hasSpace()) {
       quota = QuotaTableUtil.getNamespaceQuota(master.getConnection(), tn.getNamespaceAsString());
       if (quota != null) {
-        masterSnapshot = QuotaTableUtil.getCurrentSnapshot(master.getConnection(), tn.getNamespaceAsString());
+        masterSnapshot = master.getQuotaObserverChore().getNamespaceQuotaSnapshots()
+          .get(tn.getNamespaceAsString());
       }
     } else {
-      masterSnapshot = QuotaTableUtil.getCurrentSnapshot(master.getConnection(), tn);
+      masterSnapshot = master.getQuotaObserverChore().getTableQuotaSnapshots().get(tn);
     }
     if (quota != null && quota.hasSpace()) {
       SpaceQuota spaceQuota = quota.getSpace();
@@ -443,22 +439,8 @@ if ( fqtn != null ) {
 
   if(regions != null && regions.size() > 0) { %>
 <h2>Table Regions</h2>
-Sort As
-<select id="sel" style="margin-right: 10px">
-<option value="regionName">RegionName</option>
-<option value="readrequest">ReadRequest</option>
-<option value="writerequest">WriteRequest</option>
-<option value="size">StorefileSize</option>
-<option value="filecount">Num.Storefiles</option>
-<option value="memstore">MemstoreSize</option>
-<option value="locality">Locality</option>
-</select>
-Ascending<input type="checkbox" id="ascending" value="Ascending" style="margin-right:10px">
-ShowDetailName&Start/End Key<input type="checkbox" id="showWhole" style="margin-right:10px">
-<input type="button" id="submit" value="Reorder" onClick="reloadAsSort()" style="font-size: 12pt; width: 5em; margin-bottom: 5px" class="btn">
-<p>
-
-<table class="table table-striped">
+<table id="regionServerDetailsTable" class="tablesorter table table-striped">
+<thead>
 <tr>
 <th>Name(<%= String.format("%,1d", regions.size())%>)</th>
 <th>Region Server</th>
@@ -478,97 +460,12 @@ ShowDetailName&Start/End Key<input type="checkbox" id="showWhole" style="margin-
 <%
   }
 %>
+</thead>
 </tr>
+<tbody>
 
 <%
   List<Map.Entry<RegionInfo, RegionMetrics>> entryList = new ArrayList<>(regionsToLoad.entrySet());
-  if(sortKey != null) {
-    if (sortKey.equals("readrequest")) {
-      Collections.sort(entryList, (entry1, entry2) -> {
-        if (entry1 == null || entry1.getValue() == null) {
-          return -1;
-        } else if (entry2 == null || entry2.getValue() == null) {
-          return 1;
-        }
-        int result = Long.compare(entry1.getValue().getReadRequestCount(),
-                entry2.getValue().getReadRequestCount());
-        if (reverseOrder) {
-          result = -1 * result;
-        }
-        return result;
-      });
-    } else if (sortKey.equals("writerequest")) {
-      Collections.sort(entryList, (entry1, entry2) -> {
-        if (entry1 == null || entry1.getValue() == null) {
-          return -1;
-        } else if (entry2 == null || entry2.getValue() == null) {
-          return 1;
-        }
-        int result = Long.compare(entry1.getValue().getWriteRequestCount(),
-                entry2.getValue().getWriteRequestCount());
-        if (reverseOrder) {
-          result = -1 * result;
-        }
-        return result;
-      });
-    } else if (sortKey.equals("size")) {
-      Collections.sort(entryList, (entry1, entry2) -> {
-        if (entry1 == null || entry1.getValue() == null) {
-          return -1;
-        } else if (entry2 == null || entry2.getValue() == null) {
-          return 1;
-        }
-        int result = Double.compare(entry1.getValue().getStoreFileSize().get(),
-                entry2.getValue().getStoreFileSize().get());
-        if (reverseOrder) {
-          result = -1 * result;
-        }
-        return result;
-      });
-    } else if (sortKey.equals("filecount")) {
-      Collections.sort(entryList, (entry1, entry2) -> {
-        if (entry1 == null || entry1.getValue() == null) {
-          return -1;
-        } else if (entry2 == null || entry2.getValue() == null) {
-          return 1;
-        }
-        int result = Integer.compare(entry1.getValue().getStoreCount(),
-                entry2.getValue().getStoreCount());
-        if (reverseOrder) {
-          result = -1 * result;
-        }
-        return result;
-      });
-    } else if (sortKey.equals("memstore")) {
-      Collections.sort(entryList, (entry1, entry2) -> {
-        if (entry1 == null || entry1.getValue() == null) {
-          return -1;
-        } else if (entry2 == null || entry2.getValue() == null) {
-          return 1;
-        }
-        int result = Double.compare(entry1.getValue().getMemStoreSize().get(),
-                entry2.getValue().getMemStoreSize().get());
-        if (reverseOrder) {
-          result = -1 * result;
-        }
-        return result;
-      });
-    } else if (sortKey.equals("locality")) {
-      Collections.sort(entryList, (entry1, entry2) -> {
-        if (entry1 == null || entry1.getValue() == null) {
-          return -1;
-        } else if (entry2 == null || entry2.getValue() == null) {
-          return 1;
-        }
-        int result = Double.compare(entry1.getValue().getDataLocality(),
-                entry2.getValue().getDataLocality());
-        if (reverseOrder) {
-          result = -1 * result;
-        }
-        return result;
-      });
-    }
-  }
   numRegions = regions.size();
   int numRegionsRendered = 0;
   // render all regions
@@ -619,7 +516,7 @@ ShowDetailName&Start/End Key<input type="checkbox" id="showWhole" style="margin-
       numRegionsRendered++;
 %>
 <tr>
-  <td><%= escapeXml(showWhole?Bytes.toStringBinary(regionInfo.getRegionName()):regionInfo.getEncodedName()) %></td>
+  <td><%= escapeXml(Bytes.toStringBinary(regionInfo.getRegionName())) %></td>
   <%
   if (urlRegionServer != null) {
   %>
@@ -639,8 +536,8 @@ ShowDetailName&Start/End Key<input type="checkbox" id="showWhole" style="margin-
   <td><%= fileCount%></td>
   <td><%= memSize%></td>
   <td><%= locality%></td>
-  <td><%= escapeXml(showWhole?Bytes.toStringBinary(regionInfo.getStartKey()):"-")%></td>
-  <td><%= escapeXml(showWhole?Bytes.toStringBinary(regionInfo.getEndKey()):"-")%></td>
+  <td><%= escapeXml(Bytes.toStringBinary(regionInfo.getStartKey()))%></td>
+  <td><%= escapeXml(Bytes.toStringBinary(regionInfo.getEndKey()))%></td>
   <td><%= state%></td>
   <%
   if (withReplica) {
@@ -652,6 +549,7 @@ ShowDetailName&Start/End Key<input type="checkbox" id="showWhole" style="margin-
 </tr>
 <% } %>
 <% } %>
+</tbody>
 </table>
 <% if (numRegions > numRegionsRendered) {
      String allRegionsUrl = "?name=" + URLEncoder.encode(fqtn,"UTF-8") + "&numRegions=all";
@@ -664,11 +562,12 @@ ShowDetailName&Start/End Key<input type="checkbox" id="showWhole" style="margin-
 <%
 if (withReplica) {
 %>
-<table class="table table-striped"><tr><th>Region Server</th><th>Region Count</th><th>Primary Region Count</th></tr>
+<table id="regionServerTable" class="tablesorter table table-striped"><thead><tr><th>Region Server</th><th>Region Count</th><th>Primary Region Count</th></tr></thead>
 <%
 } else {
 %>
-<table class="table table-striped"><tr><th>Region Server</th><th>Region Count</th></tr>
+<table id="regionServerTable" class="tablesorter table table-striped"><thead><tr><th>Region Server</th><th>Region Count</th></tr></thead>
+<tbody>
 <%
 }
 %>
@@ -689,6 +588,7 @@ if (withReplica) {
 %>
 </tr>
 <% } %>
+</tbody>
 </table>
 <% }
 } catch(Exception ex) {
@@ -720,46 +620,57 @@ if (withReplica) {
 Actions:
 <p>
 <center>
-<table class="table" width="95%" >
+<table class="table" style="border: 0;" width="95%" >
 <tr>
   <form method="get">
-  <input type="hidden" name="action" value="compact">
-  <input type="hidden" name="name" value="<%= escaped_fqtn %>">
-  <td style="border-style: none; text-align: center">
-      <input style="font-size: 12pt; width: 10em" type="submit" value="Compact" class="btn"></td>
-  <td style="border-style: none" width="5%">&nbsp;</td>
-  <td style="border-style: none">Row Key (optional):<input type="text" name="key" size="40"></td>
-  <td style="border-style: none">This action will force a compaction of all
-  regions of the table, or, if a key is supplied, only the region containing the
-  given key.</td>
-  </form>
-</tr>
-<tr><td style="border-style: none" colspan="4">&nbsp;</td></tr>
-<tr>
-  <form method="get">
-  <input type="hidden" name="action" value="split">
-  <input type="hidden" name="name" value="<%= escaped_fqtn %>">
-  <td style="border-style: none; text-align: center">
-      <input style="font-size: 12pt; width: 10em" type="submit" value="Split" class="btn"></td>
-  <td style="border-style: none" width="5%">&nbsp;</td>
-  <td style="border-style: none">Row Key (optional):<input type="text" name="key" size="40"></td>
-  <td style="border-style: none">This action will force a split of all eligible
-  regions of the table, or, if a key is supplied, only the region containing the
-  given key. An eligible region is one that does not contain any references to
-  other regions. Split requests for noneligible regions will be ignored.</td>
+  <input type="hidden" name="action" value="compact" />
+  <input type="hidden" name="name" value="<%= escaped_fqtn %>" />
+  <td class="centered">
+    <input style="font-size: 12pt; width: 10em" type="submit" value="Compact" class="btn" />
+  </td>
+  <td style="text-align: center;">
+    <input type="text" name="key" size="40" placeholder="Row Key (optional)" />
+  </td>
+  <td>
+    This action will force a compaction of all regions of the table, or,
+    if a key is supplied, only the region containing the
+    given key.
+  </td>
   </form>
 </tr>
 <tr>
   <form method="get">
-  <input type="hidden" name="action" value="merge">
-  <input type="hidden" name="name" value="<%= escaped_fqtn %>">
-  <td style="border-style: none; text-align: center">
-      <input style="font-size: 12pt; width: 10em" type="submit" value="Merge" class="btn"></td>
-  <td style="border-style: none" width="5%">&nbsp;</td>
-  <td style="border-style: none">Region Key (Required):<input type="text" name="left" size="40">
-  Region Key (Required) :<input type="text" name="right" size="40"></td>
-  <td style="border-style: none">This action will merge two
-  regions of the table, Merge requests for noneligible regions will be ignored.</td>
+  <input type="hidden" name="action" value="split" />
+  <input type="hidden" name="name" value="<%= escaped_fqtn %>" />
+  <td class="centered">
+    <input style="font-size: 12pt; width: 10em" type="submit" value="Split" class="btn" />
+  </td>
+  <td style="text-align: center;">
+    <input type="text" name="key" size="40" placeholder="Row Key (optional)" />
+  </td>
+  <td>
+	  This action will force a split of all eligible
+	  regions of the table, or, if a key is supplied, only the region containing the
+	  given key. An eligible region is one that does not contain any references to
+	  other regions. Split requests for noneligible regions will be ignored.
+  </td>
+  </form>
+</tr>
+<tr>
+  <form method="get">
+  <input type="hidden" name="action" value="merge" />
+  <input type="hidden" name="name" value="<%= escaped_fqtn %>" />
+  <td class="centered">
+    <input style="font-size: 12pt; width: 10em" type="submit" value="Merge" class="btn" />
+  </td>
+  <td style="text-align: center;">
+    <input type="text" name="left" size="40" required="required" placeholder="Region Key (required)" />
+    <input type="text" name="right" size="40" required="required" placeholder="Region Key (required)" />
+  </td>
+  <td>
+    This action will merge two regions of the table, Merge requests for
+    noneligible regions will be ignored.
+  </td>
   </form>
 </tr>
 </table>
@@ -800,42 +711,21 @@ Actions:
         </div>
     </div>
 <p><hr><p>
-<p>Go <a href="javascript:history.back()">Back</a>, or wait for the redirect.
+<jsp:include page="redirect.jsp" />
 </div>
 <% } %>
 
 <jsp:include page="footer.jsp" />
+<script src="/static/js/jquery.min.js" type="text/javascript"></script>
+<script src="/static/js/jquery.tablesorter.min.js" type="text/javascript"></script>
+<script src="/static/js/bootstrap.min.js" type="text/javascript"></script>
 
 <script>
-var index=0;
-var sortKeyValue='<%= StringEscapeUtils.escapeEcmaScript(sortKey) %>';
-if(sortKeyValue=="readrequest")index=1;
-else if(sortKeyValue=="writerequest")index=2;
-else if(sortKeyValue=="size")index=3;
-else if(sortKeyValue=="filecount")index=4;
-else if(sortKeyValue=="memstore")index=5;
-else if(sortKeyValue=="locality")index=6;
-document.getElementById("sel").selectedIndex=index;
-
-<% // turned into a boolean when we pulled it out of the request. %>
-var reverse='<%= reverseOrder %>';
-if(reverse=='false')document.getElementById("ascending").checked=true;
-
-<% // turned into a boolean when we pulled it out of the request. %>
-var showWhole='<%= showWhole %>';
-if(showWhole=='true')document.getElementById("showWhole").checked=true;
-
-function reloadAsSort(){
-  var url="?name="+'<%= URLEncoder.encode(fqtn) %>';
-  if(document.getElementById("sel").selectedIndex>0){
-    url=url+"&sort="+document.getElementById("sel").value;
-  }
-  if(document.getElementById("ascending").checked){
-    url=url+"&reverse=false";
-  }
-  if(document.getElementById("showWhole").checked){
-    url=url+"&showwhole=true";
-  }
-  location.href=url;
-}
+$(document).ready(function()
+    {
+        $("#regionServerTable").tablesorter();
+        $("#regionServerDetailsTable").tablesorter();
+        $("#tableRegionTable").tablesorter();
+    }
+);
 </script>

@@ -21,7 +21,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import java.util.UUID;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
@@ -102,7 +101,7 @@ public class TestScanEarlyTermination extends SecureTestUtil {
     rsHost.createEnvironment(ac, Coprocessor.PRIORITY_HIGHEST, 1, conf);
 
     // Wait for the ACL table to become available
-    TEST_UTIL.waitTableEnabled(AccessControlLists.ACL_TABLE_NAME);
+    TEST_UTIL.waitTableEnabled(PermissionStorage.ACL_TABLE_NAME);
 
     // create a set of test users
     USER_OWNER = User.createUserForTesting(conf, "owner", new String[0]);
@@ -143,7 +142,7 @@ public class TestScanEarlyTermination extends SecureTestUtil {
       // Test deleted the table, no problem
       LOG.info("Test deleted table " + TEST_TABLE.getTableName());
     }
-    assertEquals(0, AccessControlLists.getTablePermissions(conf, TEST_TABLE.getTableName()).size());
+    assertEquals(0, PermissionStorage.getTablePermissions(conf, TEST_TABLE.getTableName()).size());
   }
 
   @Test
@@ -157,7 +156,7 @@ public class TestScanEarlyTermination extends SecureTestUtil {
       @Override
       public Object run() throws Exception {
         // force a new RS connection
-        conf.set("testkey", UUID.randomUUID().toString());
+        conf.set("testkey", TEST_UTIL.getRandomUUID().toString());
         Connection connection = ConnectionFactory.createConnection(conf);
         Table t = connection.getTable(TEST_TABLE.getTableName());
         try {
@@ -184,7 +183,7 @@ public class TestScanEarlyTermination extends SecureTestUtil {
       @Override
       public Object run() throws Exception {
         // force a new RS connection
-        conf.set("testkey", UUID.randomUUID().toString());
+        conf.set("testkey", TEST_UTIL.getRandomUUID().toString());
         Connection connection = ConnectionFactory.createConnection(conf);
         Table t = connection.getTable(TEST_TABLE.getTableName());
         try {
@@ -210,7 +209,7 @@ public class TestScanEarlyTermination extends SecureTestUtil {
       @Override
       public Object run() throws Exception {
         // force a new RS connection
-        conf.set("testkey", UUID.randomUUID().toString());
+        conf.set("testkey", TEST_UTIL.getRandomUUID().toString());
         Connection connection = ConnectionFactory.createConnection(conf);
         Table t = connection.getTable(TEST_TABLE.getTableName());
         try {
@@ -234,7 +233,7 @@ public class TestScanEarlyTermination extends SecureTestUtil {
       @Override
       public Object run() throws Exception {
         // force a new RS connection
-        conf.set("testkey", UUID.randomUUID().toString());
+        conf.set("testkey", TEST_UTIL.getRandomUUID().toString());
         Connection connection = ConnectionFactory.createConnection(conf);
         Table t = connection.getTable(TEST_TABLE.getTableName());
         try {
@@ -262,7 +261,7 @@ public class TestScanEarlyTermination extends SecureTestUtil {
       @Override
       public Object run() throws Exception {
         // force a new RS connection
-        conf.set("testkey", UUID.randomUUID().toString());
+        conf.set("testkey", TEST_UTIL.getRandomUUID().toString());
         Connection connection = ConnectionFactory.createConnection(conf);
         Table t = connection.getTable(TEST_TABLE.getTableName());
         try {

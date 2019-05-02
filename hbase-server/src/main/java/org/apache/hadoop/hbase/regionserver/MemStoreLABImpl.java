@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.ByteBufferExtendedCell;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValueUtil;
@@ -108,7 +109,10 @@ public class MemStoreLABImpl implements MemStoreLAB {
 
   @Override
   public Cell copyCellInto(Cell cell) {
-    return copyCellInto(cell, maxAlloc);
+    // See head of copyBBECellInto for how it differs from copyCellInto
+    return (cell instanceof ByteBufferExtendedCell)?
+        copyBBECellInto((ByteBufferExtendedCell)cell, maxAlloc):
+        copyCellInto(cell, maxAlloc);
   }
 
   /**
@@ -120,12 +124,12 @@ public class MemStoreLABImpl implements MemStoreLAB {
    */
   @Override
   public Cell forceCopyOfBigCellInto(Cell cell) {
-    int size = KeyValueUtil.length(cell) + ChunkCreator.SIZEOF_CHUNK_HEADER;
+    int size = Segment.getCellLength(cell);
+    size += ChunkCreator.SIZEOF_CHUNK_HEADER;
     Preconditions.checkArgument(size >= 0, "negative size");
     if (size <= dataChunkSize) {
       // Using copyCellInto for cells which are bigger than the original maxAlloc
-      Cell newCell = copyCellInto(cell, dataChunkSize);
-      return newCell;
+      return copyCellInto(cell, dataChunkSize);
     } else {
       Chunk c = getNewExternalChunk(size);
       int allocOffset = c.alloc(size);
@@ -133,8 +137,49 @@ public class MemStoreLABImpl implements MemStoreLAB {
     }
   }
 
+  /**
+   * Mostly a duplicate of {@link #copyCellInto(Cell, int)}} done for perf sake. It presumes
+   * ByteBufferExtendedCell instead of Cell so we deal with a specific type rather than the
+   * super generic Cell. Removes instanceof checks. Shrinkage is enough to make this inline where
+   * before it was too big. Uses less CPU. See HBASE-20875 for evidence.
+   * @see #copyCellInto(Cell, int)
+   */
+  private Cell copyBBECellInto(ByteBufferExtendedCell cell, int maxAlloc) {
+    int size = cell.getSerializedSize();
+    Preconditions.checkArgument(size >= 0, "negative size");
+    // Callers should satisfy large allocations from JVM heap so limit fragmentation.
+    if (size > maxAlloc) {
+      return null;
+    }
+    Chunk c = null;
+    int allocOffset = 0;
+    while (true) {
+      // Try to get the chunk
+      c = getOrMakeChunk();
+      // We may get null because the some other thread succeeded in getting the lock
+      // and so the current thread has to try again to make its chunk or grab the chunk
+      // that the other thread created
+      // Try to allocate from this chunk
+      if (c != null) {
+        allocOffset = c.alloc(size);
+        if (allocOffset != -1) {
+          // We succeeded - this is the common case - small alloc
+          // from a big buffer
+          break;
+        }
+        // not enough space!
+        // try to retire this chunk
+        tryRetireChunk(c);
+      }
+    }
+    return copyBBECToChunkCell(cell, c.getData(), allocOffset, size);
+  }
+
+  /**
+   * @see #copyBBECellInto(ByteBufferExtendedCell, int)
+   */
   private Cell copyCellInto(Cell cell, int maxAlloc) {
-    int size = KeyValueUtil.length(cell);
+    int size = Segment.getCellLength(cell);
     Preconditions.checkArgument(size >= 0, "negative size");
     // Callers should satisfy large allocations directly from JVM since they
     // don't cause fragmentation as badly.
@@ -168,8 +213,9 @@ public class MemStoreLABImpl implements MemStoreLAB {
   /**
    * Clone the passed cell by copying its data into the passed buf and create a cell with a chunkid
    * out of it
+   * @see #copyBBECToChunkCell(ByteBufferExtendedCell, ByteBuffer, int, int)
    */
-  private Cell copyToChunkCell(Cell cell, ByteBuffer buf, int offset, int len) {
+  private static Cell copyToChunkCell(Cell cell, ByteBuffer buf, int offset, int len) {
     int tagsLen = cell.getTagsLength();
     if (cell instanceof ExtendedCell) {
       ((ExtendedCell) cell).write(buf, offset);
@@ -179,6 +225,23 @@ public class MemStoreLABImpl implements MemStoreLAB {
       // serialization format only.
       KeyValueUtil.appendTo(cell, buf, offset, true);
     }
+    return createChunkCell(buf, offset, len, tagsLen, cell.getSequenceId());
+  }
+
+  /**
+   * Clone the passed cell by copying its data into the passed buf and create a cell with a chunkid
+   * out of it
+   * @see #copyToChunkCell(Cell, ByteBuffer, int, int)
+   */
+  private static Cell copyBBECToChunkCell(ByteBufferExtendedCell cell, ByteBuffer buf, int offset,
+      int len) {
+    int tagsLen = cell.getTagsLength();
+    cell.write(buf, offset);
+    return createChunkCell(buf, offset, len, tagsLen, cell.getSequenceId());
+  }
+
+  private static Cell createChunkCell(ByteBuffer buf, int offset, int len, int tagsLen,
+      long sequenceId) {
     // TODO : write the seqid here. For writing seqId we should create a new cell type so
     // that seqId is not used as the state
     if (tagsLen == 0) {
@@ -186,9 +249,9 @@ public class MemStoreLABImpl implements MemStoreLAB {
       // which directly return tagsLen as 0. So we avoid parsing many length components in
       // reading the tagLength stored in the backing buffer. The Memstore addition of every Cell
       // call getTagsLength().
-      return new NoTagByteBufferChunkKeyValue(buf, offset, len, cell.getSequenceId());
+      return new NoTagByteBufferChunkKeyValue(buf, offset, len, sequenceId);
     } else {
-      return new ByteBufferChunkKeyValue(buf, offset, len, cell.getSequenceId());
+      return new ByteBufferChunkKeyValue(buf, offset, len, sequenceId);
     }
   }
 
@@ -255,8 +318,7 @@ public class MemStoreLABImpl implements MemStoreLAB {
    */
   private Chunk getOrMakeChunk() {
     // Try to get the chunk
-    Chunk c;
-    c = currChunk.get();
+    Chunk c = currChunk.get();
     if (c != null) {
       return c;
     }

@@ -1,6 +1,4 @@
 /**
- *
-
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -107,9 +105,12 @@ public interface ClusterConnection extends Connection {
       final byte [] row) throws IOException;
 
   /**
-   * Allows flushing the region cache.
+   * @deprecated {@link #clearRegionLocationCache()} instead.
    */
-  void clearRegionCache();
+  @Deprecated
+  default void clearRegionCache() {
+    clearRegionLocationCache();
+  }
 
   void cacheLocation(final TableName tableName, final RegionLocations location);
 
@@ -232,7 +233,7 @@ public interface ClusterConnection extends Connection {
 
   /**
    * Establishes a connection to the region server at the specified address.
-   * @param serverName
+   * @param serverName the region server to connect to
    * @return proxy for HRegionServer
    * @throws IOException if a remote or network exception occurs
    */
@@ -242,7 +243,7 @@ public interface ClusterConnection extends Connection {
    * Establishes a connection to the region server at the specified address, and returns
    * a region client protocol.
    *
-   * @param serverName
+   * @param serverName the region server to connect to
    * @return ClientProtocol proxy for RegionServer
    * @throws IOException if a remote or network exception occurs
    *

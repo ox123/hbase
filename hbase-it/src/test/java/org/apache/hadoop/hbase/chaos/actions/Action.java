@@ -21,9 +21,11 @@ package org.apache.hadoop.hbase.chaos.actions;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import org.apache.commons.lang3.RandomUtils;
@@ -65,6 +67,10 @@ public class Action {
     "hbase.chaosmonkey.action.killdatanodetimeout";
   public static final String START_DATANODE_TIMEOUT_KEY =
     "hbase.chaosmonkey.action.startdatanodetimeout";
+  public static final String KILL_NAMENODE_TIMEOUT_KEY =
+      "hbase.chaosmonkey.action.killnamenodetimeout";
+  public static final String START_NAMENODE_TIMEOUT_KEY =
+      "hbase.chaosmonkey.action.startnamenodetimeout";
 
   protected static final Logger LOG = LoggerFactory.getLogger(Action.class);
 
@@ -76,6 +82,8 @@ public class Action {
   protected static final long START_ZK_NODE_TIMEOUT_DEFAULT = PolicyBasedChaosMonkey.TIMEOUT;
   protected static final long KILL_DATANODE_TIMEOUT_DEFAULT = PolicyBasedChaosMonkey.TIMEOUT;
   protected static final long START_DATANODE_TIMEOUT_DEFAULT = PolicyBasedChaosMonkey.TIMEOUT;
+  protected static final long KILL_NAMENODE_TIMEOUT_DEFAULT = PolicyBasedChaosMonkey.TIMEOUT;
+  protected static final long START_NAMENODE_TIMEOUT_DEFAULT = PolicyBasedChaosMonkey.TIMEOUT;
 
   protected ActionContext context;
   protected HBaseCluster cluster;
@@ -90,6 +98,8 @@ public class Action {
   protected long startZkNodeTimeout;
   protected long killDataNodeTimeout;
   protected long startDataNodeTimeout;
+  protected long killNameNodeTimeout;
+  protected long startNameNodeTimeout;
 
   public void init(ActionContext context) throws IOException {
     this.context = context;
@@ -112,6 +122,11 @@ public class Action {
       KILL_DATANODE_TIMEOUT_DEFAULT);
     startDataNodeTimeout = cluster.getConf().getLong(START_DATANODE_TIMEOUT_KEY,
       START_DATANODE_TIMEOUT_DEFAULT);
+    killNameNodeTimeout =
+        cluster.getConf().getLong(KILL_NAMENODE_TIMEOUT_KEY, KILL_NAMENODE_TIMEOUT_DEFAULT);
+    startNameNodeTimeout =
+        cluster.getConf().getLong(START_NAMENODE_TIMEOUT_KEY, START_NAMENODE_TIMEOUT_DEFAULT);
+
   }
 
   public void perform() throws Exception { }
@@ -125,16 +140,13 @@ public class Action {
       return new ServerName [] {};
     }
     ServerName master = clusterStatus.getMasterName();
-    if (master == null || !regionServers.contains(master)) {
-      return regionServers.toArray(new ServerName[count]);
-    }
-    if (count == 1) {
-      return new ServerName [] {};
-    }
+    Set<ServerName> masters = new HashSet<ServerName>();
+    masters.add(master);
+    masters.addAll(clusterStatus.getBackupMasterNames());
     ArrayList<ServerName> tmp = new ArrayList<>(count);
     tmp.addAll(regionServers);
-    tmp.remove(master);
-    return tmp.toArray(new ServerName[count-1]);
+    tmp.removeAll(masters);
+    return tmp.toArray(new ServerName[tmp.size()]);
   }
 
   protected void killMaster(ServerName server) throws IOException {
@@ -197,6 +209,20 @@ public class Action {
     LOG.info("Started datanode " + server);
   }
 
+  protected void killNameNode(ServerName server) throws IOException {
+    LOG.info("Killing namenode :-" + server.getHostname());
+    cluster.killNameNode(server);
+    cluster.waitForNameNodeToStop(server, killNameNodeTimeout);
+    LOG.info("Killed namenode:" + server + ". Reported num of rs:"
+        + cluster.getClusterMetrics().getLiveServerMetrics().size());
+  }
+
+  protected void startNameNode(ServerName server) throws IOException {
+    LOG.info("Starting Namenode :-" + server.getHostname());
+    cluster.startNameNode(server);
+    cluster.waitForNameNodeToStart(server, startNameNodeTimeout);
+    LOG.info("Started namenode:" + server);
+  }
   protected void unbalanceRegions(ClusterMetrics clusterStatus,
       List<ServerName> fromServers, List<ServerName> toServers,
       double fractionOfRegions) throws Exception {
@@ -226,7 +252,7 @@ public class Action {
         break;
       }
       int targetIx = RandomUtils.nextInt(0, toServers.size());
-      admin.move(victimRegion, Bytes.toBytes(toServers.get(targetIx).getServerName()));
+      admin.move(victimRegion, toServers.get(targetIx));
     }
   }
 
@@ -234,7 +260,7 @@ public class Action {
     Admin admin = this.context.getHBaseIntegrationTestingUtility().getAdmin();
     boolean result = false;
     try {
-      result = admin.balancer();
+      result = admin.balance();
     } catch (Exception e) {
       LOG.warn("Got exception while doing balance ", e);
     }

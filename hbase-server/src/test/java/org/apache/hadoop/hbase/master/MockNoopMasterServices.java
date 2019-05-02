@@ -20,10 +20,8 @@ package org.apache.hadoop.hbase.master;
 import static org.mockito.Mockito.mock;
 
 import com.google.protobuf.Service;
-
 import java.io.IOException;
 import java.util.List;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hbase.ChoreService;
@@ -44,6 +42,7 @@ import org.apache.hadoop.hbase.master.locking.LockManager;
 import org.apache.hadoop.hbase.master.normalizer.RegionNormalizer;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.replication.ReplicationPeerManager;
+import org.apache.hadoop.hbase.master.replication.SyncReplicationReplayWALManager;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotManager;
 import org.apache.hadoop.hbase.procedure.MasterProcedureManagerHost;
 import org.apache.hadoop.hbase.procedure2.LockedResource;
@@ -54,10 +53,10 @@ import org.apache.hadoop.hbase.quotas.MasterQuotaManager;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
-import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
+import org.apache.hadoop.hbase.replication.SyncReplicationState;
+import org.apache.hadoop.hbase.security.access.AccessChecker;
+import org.apache.hadoop.hbase.security.access.ZKPermissionWatcher;
 import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
-
-import com.google.protobuf.Service;
 
 public class MockNoopMasterServices implements MasterServices {
   private final Configuration conf;
@@ -163,11 +162,6 @@ public class MockNoopMasterServices implements MasterServices {
   }
 
   @Override
-  public MetaTableLocator getMetaTableLocator() {
-    return null;
-  }
-
-  @Override
   public ClusterConnection getConnection() {
     return null;
   }
@@ -212,16 +206,6 @@ public class MockNoopMasterServices implements MasterServices {
   @Override
   public TableDescriptors getTableDescriptors() {
     return null;
-  }
-
-  private boolean serverCrashProcessingEnabled = true;
-
-  public void setServerCrashProcessingEnabled(boolean b) {
-    serverCrashProcessingEnabled = b;
-  }
-  @Override
-  public boolean isServerCrashProcessingEnabled() {
-    return serverCrashProcessingEnabled;
   }
 
   @Override
@@ -453,11 +437,6 @@ public class MockNoopMasterServices implements MasterServices {
   }
 
   @Override
-  public boolean recoverMeta() throws IOException {
-    return false;
-  }
-
-  @Override
   public String getClientIdAuditPrefix() {
     return null;
   }
@@ -485,5 +464,25 @@ public class MockNoopMasterServices implements MasterServices {
   @Override
   public boolean isClusterUp() {
     return true;
+  }
+
+  public long transitReplicationPeerSyncReplicationState(String peerId,
+    SyncReplicationState clusterState) throws ReplicationException, IOException {
+    return 0;
+  }
+
+  @Override
+  public SyncReplicationReplayWALManager getSyncReplicationReplayWALManager() {
+    return null;
+  }
+
+  @Override
+  public AccessChecker getAccessChecker() {
+    return null;
+  }
+
+  @Override
+  public ZKPermissionWatcher getZKPermissionWatcher() {
+    return null;
   }
 }

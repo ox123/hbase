@@ -20,6 +20,7 @@
 include Java
 
 java_import org.apache.hadoop.hbase.util.Bytes
+java_import org.apache.hadoop.hbase.client.RegionReplicaUtil
 
 # Wrapper for org.apache.hadoop.hbase.client.Table
 
@@ -250,14 +251,12 @@ EOF
 
     #----------------------------------------------------------------------------------------------
     # Increment a counter atomically
+    # rubocop:disable Metrics/AbcSize, CyclomaticComplexity, MethodLength
     def _incr_internal(row, column, value = nil, args = {})
       value = 1 if value.is_a?(Hash)
       value ||= 1
       incr = org.apache.hadoop.hbase.client.Increment.new(row.to_s.to_java_bytes)
       family, qualifier = parse_column_name(column)
-      if qualifier.nil?
-        raise ArgumentError, 'Failed to provide both column family and column qualifier for incr'
-      end
       if args.any?
         attributes = args[ATTRIBUTES]
         visibility = args[VISIBILITY]
@@ -281,9 +280,6 @@ EOF
     def _append_internal(row, column, value, args = {})
       append = org.apache.hadoop.hbase.client.Append.new(row.to_s.to_java_bytes)
       family, qualifier = parse_column_name(column)
-      if qualifier.nil?
-        raise ArgumentError, 'Failed to provide both column family and column qualifier for append'
-      end
       if args.any?
         attributes = args[ATTRIBUTES]
         visibility = args[VISIBILITY]
@@ -301,6 +297,7 @@ EOF
       org.apache.hadoop.hbase.util.Bytes.toStringBinary(cell.getValueArray,
                                                         cell.getValueOffset, cell.getValueLength)
     end
+    # rubocop:enable Metrics/AbcSize, CyclomaticComplexity, MethodLength
 
     #----------------------------------------------------------------------------------------------
     # Count rows in a table
@@ -404,8 +401,8 @@ EOF
           end
 
           # Additional params
-          get.setMaxVersions(vers)
-          get.setTimeStamp(args[TIMESTAMP]) if args[TIMESTAMP]
+          get.readVersions(vers)
+          get.setTimestamp(args[TIMESTAMP]) if args[TIMESTAMP]
           get.setTimeRange(args[TIMERANGE][0], args[TIMERANGE][1]) if args[TIMERANGE]
         else
           if attributes
@@ -419,9 +416,9 @@ EOF
             end
           end
 
-          get.setMaxVersions(vers)
+          get.readVersions(vers)
           # Set the timestamp/timerange
-          get.setTimeStamp(ts.to_i) if args[TIMESTAMP]
+          get.setTimestamp(ts.to_i) if args[TIMESTAMP]
           get.setTimeRange(args[TIMERANGE][0], args[TIMERANGE][1]) if args[TIMERANGE]
         end
         set_attributes(get, attributes) if attributes
@@ -476,7 +473,7 @@ EOF
       # Format get request
       get = org.apache.hadoop.hbase.client.Get.new(row.to_s.to_java_bytes)
       get.addColumn(family, qualifier)
-      get.setMaxVersions(1)
+      get.readVersions(1)
 
       # Call hbase
       result = @table.get(get)
@@ -511,6 +508,13 @@ EOF
         # Normalize column names
         columns = [columns] if columns.class == String
         limit = args['LIMIT'] || -1
+        replica_id = args[REGION_REPLICA_ID]
+        isolation_level = args[ISOLATION_LEVEL]
+        read_type = args[READ_TYPE]
+        allow_partial_results = args[ALLOW_PARTIAL_RESULTS].nil? ? false : args[ALLOW_PARTIAL_RESULTS]
+        batch = args[BATCH] || -1
+        max_result_size = args[MAX_RESULT_SIZE] || -1
+
         unless columns.is_a?(Array)
           raise ArgumentError, 'COLUMNS must be specified as a String or an Array'
         end
@@ -549,13 +553,19 @@ EOF
         scan.setCacheBlocks(cache_blocks)
         scan.setReversed(reversed)
         scan.setCaching(cache) if cache > 0
-        scan.setMaxVersions(versions) if versions > 1
+        scan.readVersions(versions) if versions > 1
         scan.setTimeRange(timerange[0], timerange[1]) if timerange
         scan.setRaw(raw)
-        scan.setCaching(limit) if limit > 0
+        scan.setLimit(limit) if limit > 0
         set_attributes(scan, attributes) if attributes
         set_authorizations(scan, authorizations) if authorizations
         scan.setConsistency(org.apache.hadoop.hbase.client.Consistency.valueOf(consistency)) if consistency
+        scan.setReplicaId(replica_id) if replica_id
+        scan.setIsolationLevel(org.apache.hadoop.hbase.client.IsolationLevel.valueOf(isolation_level)) if isolation_level
+        scan.setReadType(org.apache.hadoop.hbase.client::Scan::ReadType.valueOf(read_type)) if read_type
+        scan.setAllowPartialResults(allow_partial_results) if allow_partial_results
+        scan.setBatch(batch) if batch > 0
+        scan.setMaxResultSize(max_result_size) if max_result_size > 0
       else
         scan = org.apache.hadoop.hbase.client.Scan.new
       end
@@ -574,7 +584,6 @@ EOF
       raise(ArgumentError, 'Scan argument should be org.apache.hadoop.hbase.client.Scan') \
         unless scan.nil? || scan.is_a?(org.apache.hadoop.hbase.client.Scan)
 
-      limit = args['LIMIT'] || -1
       maxlength = args.delete('MAXLENGTH') || -1
       converter = args.delete(FORMATTER) || nil
       converter_class = args.delete(FORMATTER_CLASS) || 'org.apache.hadoop.hbase.util.Bytes'
@@ -608,13 +617,8 @@ EOF
             res[key][column] = cell
           end
         end
-
         # One more row processed
         count += 1
-        if limit > 0 && count >= limit
-          # If we reached the limit, exit before the next call to hasNext
-          break
-        end
       end
 
       scanner.close
@@ -781,13 +785,16 @@ EOF
     end
 
     def convert_bytes(bytes, converter_class = nil, converter_method = nil)
-      convert_bytes_with_position(bytes, 0, bytes.length, converter_class, converter_method)
+      # Avoid nil
+      converter_class ||= 'org.apache.hadoop.hbase.util.Bytes'
+      converter_method ||= 'toStringBinary'
+      eval(converter_class).method(converter_method).call(bytes)
     end
 
     def convert_bytes_with_position(bytes, offset, len, converter_class, converter_method)
       # Avoid nil
-      converter_class = 'org.apache.hadoop.hbase.util.Bytes' unless converter_class
-      converter_method = 'toStringBinary' unless converter_method
+      converter_class ||= 'org.apache.hadoop.hbase.util.Bytes'
+      converter_method ||= 'toStringBinary'
       eval(converter_class).method(converter_method).call(bytes, offset, len)
     end
 
@@ -808,6 +815,7 @@ EOF
     def _get_splits_internal
       locator = @table.getRegionLocator
       locator.getAllRegionLocations
+             .select { |s| RegionReplicaUtil.isDefaultReplica(s.getRegion) }
              .map { |i| Bytes.toStringBinary(i.getRegionInfo.getStartKey) }
              .delete_if { |k| k == '' }
     ensure

@@ -20,9 +20,13 @@ package org.apache.hadoop.hbase.procedure2;
 import org.apache.hadoop.hbase.procedure2.util.DelayedUtil;
 import org.apache.yetus.audience.InterfaceAudience;
 
+/**
+ * Vessel that carries a Procedure and a timeout.
+ */
 @InterfaceAudience.Private
-class DelayedProcedure extends DelayedUtil.DelayedContainerWithTimestamp<Procedure<?>> {
-  public DelayedProcedure(Procedure<?> procedure) {
+class DelayedProcedure<TEnvironment>
+    extends DelayedUtil.DelayedContainerWithTimestamp<Procedure<TEnvironment>> {
+  public DelayedProcedure(Procedure<TEnvironment> procedure) {
     super(procedure, procedure.getTimeoutTimestamp());
   }
 }

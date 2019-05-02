@@ -21,34 +21,31 @@ import static org.apache.hadoop.hbase.client.ConnectionUtils.calcEstimatedSize;
 import static org.apache.hadoop.hbase.client.ConnectionUtils.createScanResultCache;
 import static org.apache.hadoop.hbase.client.ConnectionUtils.incRegionCountMetrics;
 
-import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
-
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.concurrent.ExecutorService;
-
 import org.apache.commons.lang3.mutable.MutableBoolean;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.client.ScannerCallable.MoreResults;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
-import org.apache.hadoop.hbase.exceptions.OutOfOrderScannerNextException;
-import org.apache.hadoop.hbase.exceptions.ScannerResetException;
-import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.NotServingRegionException;
-import org.apache.hadoop.hbase.regionserver.RegionServerStoppedException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.UnknownScannerException;
+import org.apache.hadoop.hbase.client.ScannerCallable.MoreResults;
+import org.apache.hadoop.hbase.exceptions.OutOfOrderScannerNextException;
+import org.apache.hadoop.hbase.exceptions.ScannerResetException;
+import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
+import org.apache.hadoop.hbase.regionserver.LeaseException;
+import org.apache.hadoop.hbase.regionserver.RegionServerStoppedException;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * Implements the scanner interface for the HBase client. If there are multiple regions in a table,
@@ -75,7 +72,6 @@ public abstract class ClientScanner extends AbstractClientScanner {
   private final ClusterConnection connection;
   protected final TableName tableName;
   protected final int scannerTimeout;
-  protected boolean scanMetricsPublished = false;
   protected RpcRetryingCaller<Result[]> caller;
   protected RpcControllerFactory rpcControllerFactory;
   protected Configuration conf;
@@ -119,10 +115,8 @@ public abstract class ClientScanner extends AbstractClientScanner {
       this.maxScannerResultSize = conf.getLong(HConstants.HBASE_CLIENT_SCANNER_MAX_RESULT_SIZE_KEY,
         HConstants.DEFAULT_HBASE_CLIENT_SCANNER_MAX_RESULT_SIZE);
     }
-    this.scannerTimeout =
-        HBaseConfiguration.getInt(conf, HConstants.HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD,
-          HConstants.HBASE_REGIONSERVER_LEASE_PERIOD_KEY,
-          HConstants.DEFAULT_HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD);
+    this.scannerTimeout = conf.getInt(HConstants.HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD,
+        HConstants.DEFAULT_HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD);
 
     // check if application wants to collect scan metrics
     initScanMetrics(scan);
@@ -273,27 +267,6 @@ public abstract class ClientScanner extends AbstractClientScanner {
     return rrs;
   }
 
-  /**
-   * Publish the scan metrics. For now, we use scan.setAttribute to pass the metrics back to the
-   * application or TableInputFormat.Later, we could push it to other systems. We don't use metrics
-   * framework because it doesn't support multi-instances of the same metrics on the same machine;
-   * for scan/map reduce scenarios, we will have multiple scans running at the same time. By
-   * default, scan metrics are disabled; if the application wants to collect them, this behavior can
-   * be turned on by calling calling {@link Scan#setScanMetricsEnabled(boolean)}
-   */
-  protected void writeScanMetrics() {
-    if (this.scanMetrics == null || scanMetricsPublished) {
-      return;
-    }
-    // Publish ScanMetrics to the Scan Object.
-    // As we have claimed in the comment of Scan.getScanMetrics, this relies on that user will not
-    // call ResultScanner.getScanMetrics and reset the ScanMetrics. Otherwise the metrics published
-    // to Scan will be messed up.
-    scan.setAttribute(Scan.SCAN_ATTRIBUTES_METRICS_DATA,
-      ProtobufUtil.toScanMetrics(scanMetrics, false).toByteArray());
-    scanMetricsPublished = true;
-  }
-
   protected void initSyncCache() {
     cache = new ArrayDeque<>();
   }
@@ -313,11 +286,6 @@ public abstract class ClientScanner extends AbstractClientScanner {
 
     // try again to load from cache
     result = cache.poll();
-
-    // if we exhausted this scanner before calling close, write out the scan metrics
-    if (result == null) {
-      writeScanMetrics();
-    }
     return result;
   }
 
@@ -369,7 +337,7 @@ public abstract class ClientScanner extends AbstractClientScanner {
     if ((cause != null && cause instanceof NotServingRegionException) ||
         (cause != null && cause instanceof RegionServerStoppedException) ||
         e instanceof OutOfOrderScannerNextException || e instanceof UnknownScannerException ||
-        e instanceof ScannerResetException) {
+        e instanceof ScannerResetException || e instanceof LeaseException) {
       // Pass. It is easier writing the if loop test as list of what is allowed rather than
       // as a list of what is not allowed... so if in here, it means we do not throw.
       if (retriesLeft <= 0) {
@@ -551,7 +519,6 @@ public abstract class ClientScanner extends AbstractClientScanner {
 
   @Override
   public void close() {
-    if (!scanMetricsPublished) writeScanMetrics();
     if (callable != null) {
       callable.setClose();
       try {

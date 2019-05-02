@@ -228,11 +228,11 @@ public class TestImportExport {
       assertTrue(runImport(args));
 
       Get g = new Get(ROW1);
-      g.setMaxVersions();
+      g.readAllVersions();
       Result r = t.get(g);
       assertEquals(3, r.size());
       g = new Get(ROW2);
-      g.setMaxVersions();
+      g.readAllVersions();
       r = t.get(g);
       assertEquals(3, r.size());
       g = new Get(ROW3);
@@ -415,7 +415,7 @@ public class TestImportExport {
 
     //Add second version of QUAL
     p = new Put(ROW1);
-    p.addColumn(FAMILYA, QUAL, now + 5, "s".getBytes());
+    p.addColumn(FAMILYA, QUAL, now + 5, Bytes.toBytes("s"));
     exportT.put(p);
 
     //Add second Delete family marker
@@ -537,9 +537,9 @@ public class TestImportExport {
   }
 
   /**
-   * Count the number of keyvalues in the specified table for the given timerange
-   * @param table
-   * @return
+   * Count the number of keyvalues in the specified table with the given filter
+   * @param table the table to scan
+   * @return the number of keyvalues found
    * @throws IOException
    */
   private int getCount(Table table, Filter filter) throws IOException {

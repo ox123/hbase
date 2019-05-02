@@ -72,7 +72,7 @@ public class SerialReplicationTestBase {
 
   public static final class LocalReplicationEndpoint extends BaseReplicationEndpoint {
 
-    private static final UUID PEER_UUID = UUID.randomUUID();
+    private static final UUID PEER_UUID = UTIL.getRandomUUID();
 
     @Override
     public UUID getPeerUUID() {
@@ -119,6 +119,7 @@ public class SerialReplicationTestBase {
   public static void setUpBeforeClass() throws Exception {
     UTIL.getConfiguration().setInt("replication.source.nb.capacity", 10);
     UTIL.getConfiguration().setLong("replication.sleep.before.failover", 1000);
+    UTIL.getConfiguration().setLong("hbase.serial.replication.waiting.ms", 100);
     UTIL.startMiniCluster(3);
     // disable balancer
     UTIL.getAdmin().balancerSwitch(false, true);
@@ -146,8 +147,7 @@ public class SerialReplicationTestBase {
   }
 
   protected static void moveRegion(RegionInfo region, HRegionServer rs) throws Exception {
-    UTIL.getAdmin().move(region.getEncodedNameAsBytes(),
-      Bytes.toBytes(rs.getServerName().getServerName()));
+    UTIL.getAdmin().move(region.getEncodedNameAsBytes(), rs.getServerName());
     UTIL.waitFor(30000, new ExplainingPredicate<Exception>() {
 
       @Override

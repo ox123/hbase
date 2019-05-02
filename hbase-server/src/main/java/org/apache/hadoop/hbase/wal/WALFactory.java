@@ -47,9 +47,11 @@ import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesti
  * implementations:
  * <ul>
  *   <li><em>defaultProvider</em> : whatever provider is standard for the hbase version. Currently
- *                                  "filesystem"</li>
+ *                                  "asyncfs"</li>
+ *   <li><em>asyncfs</em> : a provider that will run on top of an implementation of the Hadoop
+ *                             FileSystem interface via an asynchronous client.</li>
  *   <li><em>filesystem</em> : a provider that will run on top of an implementation of the Hadoop
- *                             FileSystem interface, normally HDFS.</li>
+ *                             FileSystem interface via HDFS's synchronous DFSClient.</li>
  *   <li><em>multiwal</em> : a provider that will use multiple "filesystem" wal instances per region
  *                           server.</li>
  * </ul>
@@ -80,7 +82,6 @@ public class WALFactory {
   static final String DEFAULT_WAL_PROVIDER = Providers.defaultProvider.name();
 
   public static final String META_WAL_PROVIDER = "hbase.wal.meta_provider";
-  static final String DEFAULT_META_WAL_PROVIDER = Providers.defaultProvider.name();
 
   final String factoryId;
   private final WALProvider provider;
@@ -119,9 +120,31 @@ public class WALFactory {
   }
 
   @VisibleForTesting
+  Providers getDefaultProvider() {
+    return Providers.defaultProvider;
+  }
+
+  @VisibleForTesting
   public Class<? extends WALProvider> getProviderClass(String key, String defaultValue) {
     try {
-      return Providers.valueOf(conf.get(key, defaultValue)).clazz;
+      Providers provider = Providers.valueOf(conf.get(key, defaultValue));
+
+      // AsyncFSWALProvider is not guaranteed to work on all Hadoop versions, when it's chosen as
+      // the default and we can't use it, we want to fall back to FSHLog which we know works on
+      // all versions.
+      if (provider == getDefaultProvider() && provider.clazz == AsyncFSWALProvider.class
+          && !AsyncFSWALProvider.load()) {
+        // AsyncFSWAL has better performance in most cases, and also uses less resources, we will
+        // try to use it if possible. It deeply hacks into the internal of DFSClient so will be
+        // easily broken when upgrading hadoop.
+        LOG.warn("Failed to load AsyncFSWALProvider, falling back to FSHLogProvider");
+        return FSHLogProvider.class;
+      }
+
+      // N.b. If the user specifically requested AsyncFSWALProvider but their environment doesn't
+      // support using it (e.g. AsyncFSWALProvider.load() == false), we should let this fail and
+      // not fall back to FSHLogProvider.
+      return provider.clazz;
     } catch (IllegalArgumentException exception) {
       // Fall back to them specifying a class name
       // Note that the passed default class shouldn't actually be used, since the above only fails
@@ -130,29 +153,15 @@ public class WALFactory {
     }
   }
 
-  WALProvider createProvider(Class<? extends WALProvider> clazz, String providerId)
-      throws IOException {
-    LOG.info("Instantiating WALProvider of type " + clazz);
+  static WALProvider createProvider(Class<? extends WALProvider> clazz) throws IOException {
+    LOG.info("Instantiating WALProvider of type {}", clazz);
     try {
-      final WALProvider result = clazz.getDeclaredConstructor().newInstance();
-      result.init(this, conf, providerId);
-      return result;
+      return clazz.getDeclaredConstructor().newInstance();
     } catch (Exception e) {
       LOG.error("couldn't set up WALProvider, the configured class is " + clazz);
       LOG.debug("Exception details for failure to load WALProvider.", e);
       throw new IOException("couldn't set up WALProvider", e);
     }
-  }
-
-  /**
-   * instantiate a provider from a config property. requires conf to have already been set (as well
-   * as anything the provider might need to read).
-   */
-  WALProvider getProvider(String key, String defaultValue, String providerId) throws IOException {
-    Class<? extends WALProvider> clazz = getProviderClass(key, defaultValue);
-    WALProvider provider = createProvider(clazz, providerId);
-    provider.addWALActionsListener(new MetricsWAL());
-    return provider;
   }
 
   /**
@@ -162,6 +171,21 @@ public class WALFactory {
    *          to make a directory
    */
   public WALFactory(Configuration conf, String factoryId) throws IOException {
+    // default enableSyncReplicationWALProvider is true, only disable SyncReplicationWALProvider
+    // for HMaster or HRegionServer which take system table only. See HBASE-19999
+    this(conf, factoryId, true);
+  }
+
+  /**
+   * @param conf must not be null, will keep a reference to read params in later reader/writer
+   *          instances.
+   * @param factoryId a unique identifier for this factory. used i.e. by filesystem implementations
+   *          to make a directory
+   * @param enableSyncReplicationWALProvider whether wrap the wal provider to a
+   *          {@link SyncReplicationWALProvider}
+   */
+  public WALFactory(Configuration conf, String factoryId, boolean enableSyncReplicationWALProvider)
+      throws IOException {
     // until we've moved reader/writer construction down into providers, this initialization must
     // happen prior to provider initialization, in case they need to instantiate a reader/writer.
     timeoutMillis = conf.getInt("hbase.hlog.open.timeout", 300000);
@@ -172,7 +196,13 @@ public class WALFactory {
     this.factoryId = factoryId;
     // end required early initialization
     if (conf.getBoolean("hbase.regionserver.hlog.enabled", true)) {
-      provider = getProvider(WAL_PROVIDER, DEFAULT_WAL_PROVIDER, null);
+      WALProvider provider = createProvider(getProviderClass(WAL_PROVIDER, DEFAULT_WAL_PROVIDER));
+      if (enableSyncReplicationWALProvider) {
+        provider = new SyncReplicationWALProvider(provider);
+      }
+      provider.init(this, conf, null);
+      provider.addWALActionsListener(new MetricsWAL());
+      this.provider = provider;
     } else {
       // special handling of existing configuration behavior.
       LOG.warn("Running with WAL disabled.");
@@ -223,14 +253,27 @@ public class WALFactory {
     return provider.getWALs();
   }
 
-  private WALProvider getMetaProvider() throws IOException {
+  @VisibleForTesting
+  WALProvider getMetaProvider() throws IOException {
     for (;;) {
       WALProvider provider = this.metaProvider.get();
       if (provider != null) {
         return provider;
       }
-      provider = getProvider(META_WAL_PROVIDER, DEFAULT_META_WAL_PROVIDER,
-        AbstractFSWALProvider.META_WAL_PROVIDER_ID);
+      Class<? extends WALProvider> clz = null;
+      if (conf.get(META_WAL_PROVIDER) == null) {
+        try {
+          clz = conf.getClass(WAL_PROVIDER, Providers.defaultProvider.clazz, WALProvider.class);
+        } catch (Throwable t) {
+          // the WAL provider should be an enum. Proceed
+        }
+      } 
+      if (clz == null){
+        clz = getProviderClass(META_WAL_PROVIDER, conf.get(WAL_PROVIDER, DEFAULT_WAL_PROVIDER));
+      }
+      provider = createProvider(clz);
+      provider.init(this, conf, AbstractFSWALProvider.META_WAL_PROVIDER_ID);
+      provider.addWALActionsListener(new MetricsWAL());
       if (metaProvider.compareAndSet(null, provider)) {
         return provider;
       } else {
@@ -335,18 +378,19 @@ public class WALFactory {
 
   /**
    * Create a writer for the WAL.
+   * Uses defaults.
    * <p>
-   * should be package-private. public only for tests and
+   * Should be package-private. public only for tests and
    * {@link org.apache.hadoop.hbase.regionserver.wal.Compressor}
    * @return A WAL writer. Close when done with it.
-   * @throws IOException
    */
   public Writer createWALWriter(final FileSystem fs, final Path path) throws IOException {
     return FSHLogProvider.createWriter(conf, fs, path, false);
   }
 
   /**
-   * should be package-private, visible for recovery testing.
+   * Should be package-private, visible for recovery testing.
+   * Uses defaults.
    * @return an overwritable writer for recovered edits. caller should close.
    */
   @VisibleForTesting
@@ -362,7 +406,7 @@ public class WALFactory {
   private static final AtomicReference<WALFactory> singleton = new AtomicReference<>();
   private static final String SINGLETON_ID = WALFactory.class.getName();
   
-  // public only for FSHLog
+  // Public only for FSHLog
   public static WALFactory getInstance(Configuration configuration) {
     WALFactory factory = singleton.get();
     if (null == factory) {
@@ -415,6 +459,7 @@ public class WALFactory {
 
   /**
    * If you already have a WALFactory, you should favor the instance method.
+   * Uses defaults.
    * @return a Writer that will overwrite files. Caller must close.
    */
   static Writer createRecoveredEditsWriter(final FileSystem fs, final Path path,
@@ -425,6 +470,7 @@ public class WALFactory {
 
   /**
    * If you already have a WALFactory, you should favor the instance method.
+   * Uses defaults.
    * @return a writer that won't overwrite files. Caller must close.
    */
   @VisibleForTesting

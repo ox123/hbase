@@ -32,6 +32,8 @@ import org.apache.hadoop.hbase.procedure2.LockedResourceType;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.yetus.audience.InterfaceAudience;
 
+import org.apache.hbase.thirdparty.com.google.common.collect.ImmutableMap;
+
 /**
  * <p>
  * Locks on namespaces, tables, and regions.
@@ -43,17 +45,25 @@ import org.apache.yetus.audience.InterfaceAudience;
  */
 @InterfaceAudience.Private
 class SchemaLocking {
+
+  private final Function<Long, Procedure<?>> procedureRetriever;
   private final Map<ServerName, LockAndQueue> serverLocks = new HashMap<>();
   private final Map<String, LockAndQueue> namespaceLocks = new HashMap<>();
   private final Map<TableName, LockAndQueue> tableLocks = new HashMap<>();
   // Single map for all regions irrespective of tables. Key is encoded region name.
   private final Map<String, LockAndQueue> regionLocks = new HashMap<>();
   private final Map<String, LockAndQueue> peerLocks = new HashMap<>();
+  private final LockAndQueue metaLock;
+
+  public SchemaLocking(Function<Long, Procedure<?>> procedureRetriever) {
+    this.procedureRetriever = procedureRetriever;
+    this.metaLock = new LockAndQueue(procedureRetriever);
+  }
 
   private <T> LockAndQueue getLock(Map<T, LockAndQueue> map, T key) {
     LockAndQueue lock = map.get(key);
     if (lock == null) {
-      lock = new LockAndQueue();
+      lock = new LockAndQueue(procedureRetriever);
       map.put(key, lock);
     }
     return lock;
@@ -75,12 +85,25 @@ class SchemaLocking {
     return getLock(regionLocks, encodedRegionName);
   }
 
+  /**
+   * @deprecated only used for {@link RecoverMetaProcedure}. Should be removed along with
+   *             {@link RecoverMetaProcedure}.
+   */
+  @Deprecated
+  LockAndQueue getMetaLock() {
+    return metaLock;
+  }
+
   LockAndQueue removeRegionLock(String encodedRegionName) {
     return regionLocks.remove(encodedRegionName);
   }
 
   LockAndQueue getServerLock(ServerName serverName) {
     return getLock(serverLocks, serverName);
+  }
+
+  LockAndQueue removeServerLock(ServerName serverName) {
+    return serverLocks.remove(serverName);
   }
 
   LockAndQueue getPeerLock(String peerId) {
@@ -109,13 +132,8 @@ class SchemaLocking {
 
     List<Procedure<?>> waitingProcedures = new ArrayList<>();
 
-    for (Procedure<?> procedure : queue) {
-      if (!(procedure instanceof LockProcedure)) {
-        continue;
-      }
-
-      waitingProcedures.add(procedure);
-    }
+    queue.filterWaitingQueue(p -> p instanceof LockProcedure)
+      .forEachOrdered(waitingProcedures::add);
 
     return new LockedResource(resourceType, resourceName, lockType, exclusiveLockOwnerProcedure,
       sharedLockCount, waitingProcedures);
@@ -144,6 +162,8 @@ class SchemaLocking {
     addToLockedResources(lockedResources, regionLocks, Function.identity(),
       LockedResourceType.REGION);
     addToLockedResources(lockedResources, peerLocks, Function.identity(), LockedResourceType.PEER);
+    addToLockedResources(lockedResources, ImmutableMap.of(TableName.META_TABLE_NAME, metaLock),
+      tn -> tn.getNameAsString(), LockedResourceType.META);
     return lockedResources;
   }
 
@@ -169,6 +189,8 @@ class SchemaLocking {
       case PEER:
         queue = peerLocks.get(resourceName);
         break;
+      case META:
+        queue = metaLock;
       default:
         queue = null;
         break;
@@ -193,7 +215,8 @@ class SchemaLocking {
     return "serverLocks=" + filterUnlocked(this.serverLocks) + ", namespaceLocks=" +
       filterUnlocked(this.namespaceLocks) + ", tableLocks=" + filterUnlocked(this.tableLocks) +
       ", regionLocks=" + filterUnlocked(this.regionLocks) + ", peerLocks=" +
-      filterUnlocked(this.peerLocks);
+      filterUnlocked(this.peerLocks) + ", metaLocks=" +
+      filterUnlocked(ImmutableMap.of(TableName.META_TABLE_NAME, metaLock));
   }
 
   private String filterUnlocked(Map<?, LockAndQueue> locks) {

@@ -15,17 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.procedure2;
 
 import java.util.Iterator;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 @InterfaceAudience.Private
 public abstract class AbstractProcedureScheduler implements ProcedureScheduler {
@@ -86,6 +87,11 @@ public abstract class AbstractProcedureScheduler implements ProcedureScheduler {
   }
 
   @Override
+  public void addFront(final Procedure procedure, boolean notify) {
+    push(procedure, true, notify);
+  }
+
+  @Override
   public void addFront(Iterator<Procedure> procedureIterator) {
     schedLock();
     try {
@@ -107,6 +113,11 @@ public abstract class AbstractProcedureScheduler implements ProcedureScheduler {
   @Override
   public void addBack(final Procedure procedure) {
     push(procedure, false, true);
+  }
+
+  @Override
+  public void addBack(final Procedure procedure, boolean notify) {
+    push(procedure, false, notify);
   }
 
   protected void push(final Procedure procedure, final boolean addFront, final boolean notify) {
@@ -163,8 +174,8 @@ public abstract class AbstractProcedureScheduler implements ProcedureScheduler {
           return null;
         }
       }
-
       final Procedure pollResult = dequeue();
+
       pollCalls++;
       nullPollCalls += (pollResult == null) ? 1 : 0;
       return pollResult;
@@ -235,7 +246,8 @@ public abstract class AbstractProcedureScheduler implements ProcedureScheduler {
    * Access should remain package-private. Use ProcedureEvent class to wake/suspend events.
    * @param events the list of events to wake
    */
-  void wakeEvents(ProcedureEvent[] events) {
+  @VisibleForTesting
+  public void wakeEvents(ProcedureEvent[] events) {
     schedLock();
     try {
       for (ProcedureEvent event : events) {
@@ -253,25 +265,18 @@ public abstract class AbstractProcedureScheduler implements ProcedureScheduler {
    * Wakes up given waiting procedures by pushing them back into scheduler queues.
    * @return size of given {@code waitQueue}.
    */
-  protected int wakeWaitingProcedures(final ProcedureDeque waitQueue) {
-    int count = waitQueue.size();
-    // wakeProcedure adds to the front of queue, so we start from last in the
-    // waitQueue' queue, so that the procedure which was added first goes in the front for
-    // the scheduler queue.
-    addFront(waitQueue.descendingIterator());
-    waitQueue.clear();
-    return count;
+  protected int wakeWaitingProcedures(LockAndQueue lockAndQueue) {
+    return lockAndQueue.wakeWaitingProcedures(this);
   }
 
-  protected void waitProcedure(final ProcedureDeque waitQueue, final Procedure proc) {
-    waitQueue.addLast(proc);
+  protected void waitProcedure(LockAndQueue lockAndQueue, final Procedure proc) {
+    lockAndQueue.addLast(proc);
   }
 
   protected void wakeProcedure(final Procedure procedure) {
-    if (LOG.isTraceEnabled()) LOG.trace("Wake " + procedure);
+    LOG.trace("Wake {}", procedure);
     push(procedure, /* addFront= */ true, /* notify= */false);
   }
-
 
   // ==========================================================================
   //  Internal helpers
@@ -285,7 +290,9 @@ public abstract class AbstractProcedureScheduler implements ProcedureScheduler {
   }
 
   protected void wakePollIfNeeded(final int waitingCount) {
-    if (waitingCount <= 0) return;
+    if (waitingCount <= 0) {
+      return;
+    }
     if (waitingCount == 1) {
       schedWaitCond.signal();
     } else {
